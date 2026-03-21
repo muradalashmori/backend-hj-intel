@@ -1,0 +1,92 @@
+version: "3.9"
+
+services:
+
+  # ── Main API ──────────────────────────────────────────────────
+  hj-intel:
+    build: .
+    container_name: hj-price-intel
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}   # optional — passed per request
+      - CACHE_TTL=${CACHE_TTL:-3600}               # cache duration in seconds
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./sources.json:/app/sources.json:rw        # persistent source list
+      - ./logs:/app/logs:rw
+    networks:
+      - hj-net
+    labels:
+      - "com.hj.service=price-intelligence"
+    watch:
+      - action: sync
+        path: .
+        target: /app
+        ignore:
+          - logs/
+          - venv_runtime/
+
+  # ── Frontend ──────────────────────────────────────────────────
+  frontend:
+    build: ../frontend
+    container_name: hj-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - hj-intel
+    networks:
+      - hj-net
+    labels:
+      - "com.hj.service=frontend"
+    watch:
+      - action: rebuild
+        path: ../frontend
+        ignore:
+          - ../frontend/build/
+          - ../frontend/node_modules/
+
+  # ── Redis — persistent cache ──────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: hj-redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - hj-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Nginx reverse proxy (optional — uncomment for production) ──
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: hj-nginx
+  #   restart: unless-stopped
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+  #     - ./ssl:/etc/nginx/ssl:ro              # put your certs here
+  #   depends_on:
+  #     - hj-intel
+  #   networks:
+  #     - hj-net
+
+volumes:
+  redis_data:
+
+networks:
+  hj-net:
+    driver: bridge
