@@ -100,11 +100,20 @@ async def cache_get(key):
             return {**data, "fromCache": True, "cacheAge": int(time.time()-ts)}
     return None
 
-async def cache_set(key, data):
+async def cache_set(key, data, ttl=CACHE_TTL):
     r = await _get_redis()
     if r:
-        try: await r.setex(f"hj:{key}", CACHE_TTL, json.dumps(data, ensure_ascii=False))
-        except: pass
+        try:
+            value = json.dumps(data, ensure_ascii=False)
+            redis_key = f"hj:{key}"
+
+            if ttl is None:
+                await r.set(redis_key, value)  # بدون انتهاء
+            else:
+                await r.setex(redis_key, ttl, value)  # مع انتهاء
+        except:
+            pass
+
     _mem_cache[key] = (time.time(), data)
 
 async def cache_clear():
@@ -642,10 +651,98 @@ class NewSource(BaseModel):
     type: str = "httpx"
     priority: int = 99
 
+# ── Car Catalog Models ──────────────────────────────────────────
+class Brand(BaseModel):
+    BrandID: str = None
+    DescriptionAr: Optional[str] = None
+    DescriptionEn: Optional[str] = None
+    Description: Optional[str] = None
+
+class Group(BaseModel):
+    ListTreeGroups: str  = None
+    brandID: str = None
+    Year: str = None
+    DescriptionAr: str = None
+    DescriptionEn: str = None
+    Description: str = None
+    productGroupID: str = None
+
+
+
+class ModelType(BaseModel):
+    ModelCode: str = None
+    guid: str = None
+    ProductTypeId: str = None
+    Model: str = None
+    descriptionAr: str = None
+    descriptionEn: str = None
+    Description: str = None
+    productGroupID: str = None
+    Image: Optional[str] = None
+
+class CarCatalog(BaseModel):
+    brands: list[Brand]
+    groups: list[Group] = []
+    modelTypes: list[ModelType] = []
+
 # ── App ─────────────────────────────────────────────────────────
 app = FastAPI(title="HJ Motors Price Intelligence", version="3.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
+
+
+def transform_catalog(data):
+    return {
+        "brands": [
+            {
+                "BrandID": b.get("BrandID") or b.get("brandID") or "",
+                "DescriptionAr": b.get("DescriptionAr") or "",
+                "DescriptionEn": b.get("DescriptionEn") or "",
+                "Description": b.get("Description") or ""
+            }
+            for b in data.get("brands", [])
+        ],
+
+        "groups": [
+            {
+                "ListTreeGroups": g.get("ListTreeGroups") or "",
+                "brandID": g.get("brandID") or "",
+                "Year": g.get("Year") or "",
+                "DescriptionAr": g.get("DescriptionAr") or "",
+                "DescriptionEn": g.get("DescriptionEn") or "",
+                "Description": g.get("Description") or g.get("DescriptionEn") or g.get("DescriptionAr") or "",
+                "productGroupID": g.get("productGroupID") or g.get("ListTreeGroups") or "",
+            }
+            for g in data.get("groups", [])
+        ],
+
+        "modelTypes": [
+            {
+                "ModelCode": m.get("ModelCode") or "",
+                "guid": m.get("guid") or "",
+                "ProductTypeId": m.get("ProductTypeId") or "",
+                "Model": m.get("Model") or "",
+                "descriptionAr": m.get("descriptionAr") or "",
+                "descriptionEn": m.get("ShortDescriptionEn") or m.get("descriptionEn") or "",
+                "Description": m.get("Description") or m.get("descriptionEn") or m.get("descriptionAr") or"",
+                "productGroupID": m.get("productGroupID") or m.get("ProductGroupId") or "",
+                "Image": m.get("Image") or None
+            }
+            for m in data.get("productModels", [])
+        ]
+    }
+# ── Car Catalog Functions ───────────────────────────────────────
+async def fetch_car_catalog() -> CarCatalog:
+    url = "https://appw.hassanjameelapp.com/ar/api/Maintenance/Settings"
+    
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.get(url)
+        r.raise_for_status()
+        data = r.json()
+
+        fixed_data = transform_catalog(data)
+
+        return CarCatalog(**fixed_data)
 
 # ── Source endpoints ────────────────────────────────────────────
 @app.get("/sources")
@@ -1391,28 +1488,129 @@ def normalize_trim_dynamic(title: str, brand: str, model: str,
     # Fallback to generic match when no configured trims exist
     return normalize_trim(title, brand, model)
 
+async def get_model_trims_from_catalog(brand: str, model: str, year: int) -> list[str]:
+    """
+    يجلب أسماء فئات الموديل من الكاتالوج المخزن في الكاش.
+    يرجع قائمة بأسماء الفئات أو قائمة فارغة إن لم يوجد.
+    """
+    cached = await cache_get("car_catalog")
+    if not cached:
+        return []
+
+    model_types = cached.get("modelTypes", [])
+    groups      = cached.get("groups", [])
+    brands_list = cached.get("brands", [])
+
+    print(f"get_model_trims_from_catalog : {brands_list}  ")
+
+    # 1. نجد BrandID من اسم الماركة
+    brand_id = None
+    for b in brands_list:
+        desc = (b.get("DescriptionEn") or b.get("DescriptionAr") or "").lower()
+        if brand.lower() in desc:
+            brand_id = b.get("BrandID")
+            break
+
+    print(f"get_model_trims_from_catalog brand_id : {brand_id}  ")
+
+    if not brand_id:
+        return []
+
+    # 2. نجد ProductGroupId من اسم الموديل + السنة + BrandID
+    group_id = None
+    for g in groups:
+        if g.get("brandID") != brand_id:
+            continue
+        g_year = str(g.get("Year", ""))
+        g_desc = (g.get("DescriptionEn") or g.get("DescriptionAr") or "").lower()
+        if model.lower() in g_desc and str(year) in g_year:
+            group_id = g.get("productGroupID")
+            break
+
+    print(f"get_model_trims_from_catalog group_id : {group_id}  ")
+    # إذا ما لقينا بالسنة، نحاول بدونها
+    if not group_id:
+        for g in groups:
+            if g.get("brandID") != brand_id:
+                continue
+            g_desc = (g.get("DescriptionEn") or g.get("DescriptionAr") or "").lower()
+            if model.lower() in g_desc:
+                group_id = g.get("productGroupID")
+                break
+
+    print(f"get_model_trims_from_catalog 22 group_id : {group_id}  ")
+    if not group_id:
+        return []
+
+   # 3. جمع الفئات مع تنظيف الاسم + منع التكرار
+    trim_set = set()
+
+    for mt in model_types:
+        mt_model = str(mt.get("Model", ""))
+        if mt.get("productGroupID") == group_id and str(year) in mt_model:
+            name = mt.get("descriptionEn") or mt.get("descriptionAr") or mt.get("description") or ""
+            if not name:
+                continue
+
+            clean_name = name.lower()
+
+         # نحذف البراند والموديل والسنة ككلمات مستقلة
+            pattern = r'\b(' + re.escape(brand.lower()) + r'|' + re.escape(model.lower()) + r'|' + str(year) + r')\b'
+            clean_name = re.sub(pattern, '', clean_name)
+
+            # تنظيف المسافات
+            clean_name = " ".join(clean_name.split())
+
+            if clean_name:
+                trim_set.add(clean_name)
+
+    unique_list = list(set(trim_set))
+    return list(unique_list)[:5]  # نرجع حتى 5 فئات
 
 # ── AI fallback ─────────────────────────────────────────────────
 async def ai_fallback(brand, model, year, source_ids, key):
     print(f"starting AI fallback for {year} {brand} {model} with sources {source_ids}...")
     names = [sources_store[s]["name"] for s in source_ids if s in sources_store]
+
+      # ── جلب أسماء الفئات من الكاتالوج ──
+    catalog_trims = await get_model_trims_from_catalog(brand, model, year)
+    
+    if catalog_trims:
+        trims_hint = (
+            f"EXACTLY these official trim names :"
+            f"{json.dumps(catalog_trims, ensure_ascii=False)} in Saudi."
+        )
+    else:
+        trims_hint = "ALL official trims for {year} {brand} {model} in Saudi"
+
     prompt = f"""Saudi automotive market for: {year} {brand} {model}. SAR.
 Sources: {', '.join(names)}.
 Return ONLY valid JSON no markdown:
 {{"vehicle":"{year} {brand} {model}","brand":"{brand}","model":"{model}","year":{year},"searchDate":"{datetime.now().strftime('%B %Y')}","isAIFallback":true,"officialPriceRange":{{"min":0,"max":0}},"marketInsight":"Arabic","trims":[{{"officialName":"","officialNameAr":"","officialMSRP":0,"engine":"","commonAliases":["a1"],"listings":[{{"source":"syarah","sourceName":"Syarah.com","listedAs":"text","matchConfidence":"high","matchReason":"Arabic","condition":"جديدة","price":0,"mileage":"0 كم","location":"city","priceNote":"","sellerType":"dealer","sellerName":"","postedDaysAgo":0,"imageUrl":""}}],"priceAnalysis":{{"marketMin":0,"marketMax":0,"marketAvg":0,"vsOfficialPct":0,"trend":"stable"}}}}],"competitorAnalysis":{{"summary":"Arabic","opportunities":["Arabic"],"threats":["Arabic"],"recommendation":"Arabic"}}}}
 RULES:
-1. ALL official trims for {year} {brand} {model} in Saudi Arabia.
-2. For EACH source, provide MULTIPLE listings (5-10) per source showing price range.
-3. For each trim, calculate and include:
-   - marketMin: lowest price across all listings for this trim
-   - marketMax: highest price across all listings for this trim
-   - marketAvg: average price across all listings for this trim
-4. Use realistic current Saudi market prices (SAR) with natural variation.
-5. Ensure price ranges reflect real market diversity (dealer vs private, location differences, etc.).
-6. Output MUST be strictly valid JSON.
-7. No trailing commas, no comments."""
+1. {trims_hint}
+2. For EACH source, provide MULTIPLE listings (4-7) per source showing price range.
+3. For each trim, calculate and include: lowest ,highest ,average price across all listings for this trim.
+4. Use realistic current Saudi market prices (SAR) with natural variation."""
+
+# 5. Ensure price ranges reflect real market diversity (dealer vs private, location differences, etc.).
+# 6. Output MUST be strictly valid JSON.
+# 7. No trailing commas, no comments.
+
+#     prompt = f"""Saudi automotive market for: {year} {brand} {model}. SAR. HJ Motors Eastern Province.
+# Sources: {', '.join(names)}. Playwright scrapers returned no data — generate realistic fallback.
+# Return ONLY valid JSON no markdown:
+# {{"vehicle":"{year} {brand} {model}","brand":"{brand}","model":"{model}","year":{year},"searchDate":"{datetime.now().strftime('%B %Y')}","isAIFallback":true,"officialPriceRange":{{"min":0,"max":0}},"marketInsight":"Arabic","priceHistory":[{{"month":"Oct 25","avg":0}},{{"month":"Nov 25","avg":0}},{{"month":"Dec 25","avg":0}},{{"month":"Jan 26","avg":0}},{{"month":"Feb 26","avg":0}},{{"month":"Mar 26","avg":0}}],"trims":[{{"officialName":"","officialNameAr":"","officialMSRP":0,"engine":"","commonAliases":["a1"],"listings":[{{"source":"syarah","sourceName":"Syarah.com","listedAs":"text","matchConfidence":"high","matchReason":"Arabic","condition":"جديدة","price":0,"mileage":"0 كم","location":"city","priceNote":"","sellerType":"dealer","sellerName":"","postedDaysAgo":0,"imageUrl":""}}],"priceAnalysis":{{"marketMin":0,"marketMax":0,"marketAvg":0,"vsOfficialPct":0,"trend":"stable"}}}}],"competitorAnalysis":{{"summary":"Arabic","opportunities":["Arabic"],"threats":["Arabic"],"recommendation":"Arabic"}}}}
+# RULES:
+# 1. ALL official trims for {year} {brand} {model} in Saudi
+# 2. Yaris 2026: Y / Y Plus / Y Limited (أسعار حقيقية: Y=57,000 | Y Plus=66,700 | Y Limited=69,690)
+# 3. Camry 2026: SE/XSE/LE/XLE/XLE-V6/XSE-V6/Hybrid-XSE/Hybrid-XLE/Platinum
+# 4. Patrol 2026: SE/S/SV/SL/Platinum/Titanium
+# 5. 3-5 listings per trim from {', '.join(names[:3])}
+# 6. priceHistory: realistic 6-month trend in SAR
+# 7. CRITICAL: use REAL current Saudi market prices, NOT inflated estimates"""
     
-    print(f"AI prompt: {prompt}...")  # Log the prompt for debugging
+    print(f"AI prompt: {prompt}")  # Log the prompt for debugging
     try:
         async with httpx.AsyncClient(
                     timeout=180.0,
@@ -1428,7 +1626,7 @@ RULES:
                     },
                   json={
                     "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 12000,
+                    "max_tokens": 20000,
                     "temperature": 0.2,
                     "system": "You are a Saudi automotive market expert. Return strictly valid JSON only.",
                     "messages": [
@@ -1476,8 +1674,8 @@ RULES:
         raise
 
 # ── Main search ─────────────────────────────────────────────────
-@app.post("/search")
-async def search(req: SearchRequest):
+@app.post("/searchAll")
+async def searchAll(req: SearchRequest):
     cache_key = f"{req.brand}:{req.model}:{req.year}:{','.join(sorted(req.source_ids or []))}"
     cached = await cache_get(cache_key)
     if cached: return cached
@@ -1644,6 +1842,99 @@ async def search(req: SearchRequest):
        
     return ai_data
 
+# ── Main search ─────────────────────────────────────────────────
+@app.post("/search")
+async def search(req: SearchRequest):
+    cache_key = f"{req.brand}:{req.model}:{req.year}:{','.join(sorted(req.source_ids or []))}"
+    cached = await cache_get(cache_key)
+    if cached: return cached
+
+    active = sorted(
+        [s for s in sources_store.values() if s["enabled"] and
+         (req.source_ids is None or s["id"] in req.source_ids)],
+        key=lambda s: s.get("priority", 99)
+    )
+    print(f"active sources for {req.year} {req.brand} {req.model}: {[s['id'] for s in active]}")
+    raw: list[dict] = []
+    statuses: dict  = {}
+
+
+    # ── AI fallback if not enough data ──
+    use_ai = len(raw) < 5
+    ai_data = None
+    ai_failed = False
+    if use_ai:
+        print(f"  ⚠️  Only {len(raw)} real listings — using AI fallback")
+        try:
+            ai_data = await ai_fallback(
+                req.brand, req.model, req.year,
+                [s["id"] for s in active], req.anthropic_key
+            )
+        except Exception as e:
+            print(f"AI fallback error: {e}")
+            ai_failed = True
+
+    print(f"  Total listings collected: {len(raw)} (AI fallback used: {use_ai})")
+    # ── Merge real data with AI structure ──
+    if ai_data and raw:
+        # Get dynamic trims for accurate matching
+        dyn_trims = await fetch_official_trims(req.brand, req.model, req.year, req.anthropic_key)
+        print(f"  Fetched {len(dyn_trims)} dynamic trims for matching")
+        for l in raw:
+            name, reason, conf = normalize_trim_dynamic(l.get("listedAs",""), req.brand, req.model, dyn_trims)
+            l.update({
+                "matchReason": reason,
+                "matchConfidence": "high" if conf>0.85 else "medium" if conf>0.65 else "low"
+            })
+            t = next((t for t in ai_data.get("trims",[]) if t["officialName"]==name), None)
+            if t: t["listings"].append(l)
+            elif ai_data.get("trims"): ai_data["trims"][0]["listings"].append(l)
+
+    elif not ai_data:
+        print(f"real data only, no AI fallback — total {len(raw)} listings")
+        prices = [l["price"] for l in raw if l.get("price")]
+        avg = int(sum(prices)/len(prices)) if prices else 0
+        ai_data = {
+            "vehicle": f"{req.year} {req.brand} {req.model}",
+            "brand": req.brand, "model": req.model, "year": req.year,
+            "searchDate": datetime.now().strftime("%B %Y"), "isAIFallback": False,
+            "officialPriceRange": {"min": min(prices, default=0), "max": max(prices, default=0)},
+            "marketInsight": f"تم جمع {len(raw)} إعلان من المصادر الحية عبر Playwright",
+            "priceHistory": [],
+            "competitorAnalysis": {"summary":"","opportunities":[],"threats":[],"recommendation":""},
+            "trims": [{
+                "officialName": f"{req.model} Market",
+                "officialNameAr": f"سوق {req.model}",
+                "officialMSRP": avg, "engine": "", "commonAliases": [],
+                "listings": raw,
+                "priceAnalysis": {
+                    "marketMin": min(prices, default=0),
+                    "marketMax": max(prices, default=0),
+                    "marketAvg": avg, "vsOfficialPct": 0, "trend": "stable"
+                }
+            }],
+        }
+
+    # ── حساب إحصائيات كل مصدر لكل فئة ──
+    _attach_source_stats(ai_data)
+    print(f"  Source stats attached for {len(ai_data.get('trims', []))} trims")
+    ai_data.update({
+        "sourceStatuses": statuses,
+        "scrapedCount": len(raw),
+        "isAIFallback": use_ai,
+        "playwrightUsed": False,
+    })
+    # Save price snapshots + DOM records (only for real scraped data)
+    if not use_ai:
+        await _post_search_persist(ai_data, req.brand, req.model, req.year)
+    # Enrich with historical trend + days-on-market (from Redis)
+    await _enrich_with_history(ai_data, req.brand, req.model, req.year)
+    # Compute dealer pricing recommendation (uses supply + trend + DOM)
+    _attach_dealer_pricing(ai_data)
+    if ai_failed==False:
+       await cache_set(cache_key, ai_data)
+       
+    return ai_data
 
 def _attach_source_stats(data: dict):
     """
@@ -1759,6 +2050,24 @@ async def _enrich_with_history(data: dict, brand: str, model: str, year: int):
         dom = await dom_avg_for_trim(brand, model, trim_name)
         trim["daysOnMarket"] = dom
 
+
+# ── Car Catalog Endpoints ───────────────────────────────────────
+@app.post("/catalog/fetch")
+async def fetch_and_cache_catalog():
+    try:
+        catalog = await fetch_car_catalog()
+        await cache_set("car_catalog", catalog.dict(), ttl=None)  # Cache for 24 hours
+        return {"status": "success", "message": "Car catalog fetched and cached successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch catalog: {str(e)}")
+
+@app.get("/catalog")
+async def get_catalog():
+    cached = await cache_get("car_catalog")
+    if cached:
+        return cached
+    else:
+        raise HTTPException(status_code=404, detail="Catalog not cached. Please fetch first using POST /catalog/fetch")
 
 # ── Health ──────────────────────────────────────────────────────
 @app.get("/health")
