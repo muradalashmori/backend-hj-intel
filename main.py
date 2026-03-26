@@ -1565,7 +1565,7 @@ async def get_model_trims_from_catalog(brand: str, model: str, year: int) -> lis
                 trim_set.add(clean_name)
 
     unique_list = list(set(trim_set))
-    return list(unique_list)[:5]  # نرجع حتى 5 فئات
+    return list(unique_list)[:4]  # نرجع حتى 5 فئات
 
 # ── AI fallback ─────────────────────────────────────────────────
 async def ai_fallback(brand, model, year, source_ids, key):
@@ -1589,7 +1589,7 @@ Return ONLY valid JSON no markdown:
 {{"vehicle":"{year} {brand} {model}","brand":"{brand}","model":"{model}","year":{year},"searchDate":"{datetime.now().strftime('%B %Y')}","isAIFallback":true,"officialPriceRange":{{"min":0,"max":0}},"marketInsight":"Arabic","trims":[{{"officialName":"","officialNameAr":"","officialMSRP":0,"engine":"","commonAliases":["a1"],"listings":[{{"source":"syarah","sourceName":"Syarah.com","listedAs":"text","matchConfidence":"high","matchReason":"Arabic","condition":"جديدة","price":0,"mileage":"0 كم","location":"city","priceNote":"","sellerType":"dealer","sellerName":"","postedDaysAgo":0,"imageUrl":""}}],"priceAnalysis":{{"marketMin":0,"marketMax":0,"marketAvg":0,"vsOfficialPct":0,"trend":"stable"}}}}],"competitorAnalysis":{{"summary":"Arabic","opportunities":["Arabic"],"threats":["Arabic"],"recommendation":"Arabic"}}}}
 RULES:
 1. {trims_hint}
-2. For EACH source, provide MULTIPLE listings (4-7) per source showing price range.
+2. For EACH source, provide MULTIPLE listings (3-5) per source showing price range.
 3. For each trim, calculate and include: lowest ,highest ,average price across all listings for this trim.
 4. Use realistic current Saudi market prices (SAR) with natural variation."""
 
