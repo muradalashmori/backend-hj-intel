@@ -48,6 +48,7 @@ _mem_cache: dict  = {}
 # ── Default Sources ─────────────────────────────────────────────
 DEFAULT_SOURCES = {
     "toyota_sa":  {"id":"toyota_sa",  "name":"Toyota.com.sa",  "name_ar":"تويوتا السعودية", "url":"https://www.toyota.com.sa",  "color":"#00C49A","enabled":True, "type":"playwright","priority":1,"search_url":"https://www.toyota.com.sa/en/models/{model}", "category":"official"},
+    "lexus_sa":   {"id":"lexus_sa",   "name":"Lexus.com.sa",   "name_ar":"لكسัส",            "url":"https://www.lexus.com.sa",    "color":"#00C49A","enabled":True, "type":"playwright","priority":1,"search_url":"https://www.lexus.com.sa/en/models/{model}", "category":"official"},
     "motory":     {"id":"motory",     "name":"ksa.Motory.com",  "name_ar":"موتوري",          "url":"https://ksa.motory.com",          "color":"#f5a623","enabled":True, "type":"playwright","priority":2,"search_url":"https://motory.com/sa/new-cars/search?q={query}", "category":"new_cars"},
     "haraj":      {"id":"haraj",      "name":"Haraj.com.sa",   "name_ar":"حراج",            "url":"https://haraj.com.sa",        "color":"#ff8055","enabled":True, "type":"playwright","priority":3,"search_url":"https://haraj.com.sa/search/{query}",            "category":"marketplace"},
     "yallamotor": {"id":"yallamotor", "name":"YallaMotor",     "name_ar":"يلا موتور",       "url":"https://www.yallamotor.com",  "color":"#a78bfa","enabled":True, "type":"httpx",    "priority":4,"search_url":"https://www.yallamotor.com/new-cars/search?q={query}&country=sa", "category":"new_cars"},
@@ -696,8 +697,8 @@ def transform_catalog(data):
         "brands": [
             {
                 "BrandID": b.get("BrandID") or b.get("brandID") or "",
-                "DescriptionAr": b.get("DescriptionAr") or "",
-                "DescriptionEn": b.get("DescriptionEn") or "",
+                "DescriptionAr": b.get("Description") or "",
+                "DescriptionEn": b.get("Description") or "",
                 "Description": b.get("Description") or ""
             }
             for b in data.get("brands", [])
@@ -706,12 +707,12 @@ def transform_catalog(data):
         "groups": [
             {
                 "ListTreeGroups": g.get("ListTreeGroups") or "",
-                "brandID": g.get("brandID") or "",
+                "brandID": g.get("BrandId") or "",
                 "Year": g.get("Year") or "",
                 "DescriptionAr": g.get("DescriptionAr") or "",
                 "DescriptionEn": g.get("DescriptionEn") or "",
                 "Description": g.get("Description") or g.get("DescriptionEn") or g.get("DescriptionAr") or "",
-                "productGroupID": g.get("productGroupID") or g.get("ListTreeGroups") or "",
+                "productGroupID": g.get("ProductGroupId") or g.get("productGroupID") or "",
             }
             for g in data.get("groups", [])
         ],
@@ -723,17 +724,17 @@ def transform_catalog(data):
                 "ProductTypeId": m.get("ProductTypeId") or "",
                 "Model": m.get("Model") or "",
                 "descriptionAr": m.get("descriptionAr") or "",
-                "descriptionEn": m.get("ShortDescriptionEn") or m.get("descriptionEn") or "",
+                "descriptionEn": m.get("ShortDescriptionEn") or m.get("ShortDescriptionEn") or "",
                 "Description": m.get("Description") or m.get("descriptionEn") or m.get("descriptionAr") or"",
-                "productGroupID": m.get("productGroupID") or m.get("ProductGroupId") or "",
+                "productGroupID": m.get("ProductGroupId") or m.get("productGroupID") or "",
                 "Image": m.get("Image") or None
             }
-            for m in data.get("productModels", [])
+            for m in data.get("modelTypes", [])
         ]
     }
 # ── Car Catalog Functions ───────────────────────────────────────
 async def fetch_car_catalog() -> CarCatalog:
-    url = "https://appw.hassanjameelapp.com/ar/api/Maintenance/Settings"
+    url = "https://appw.hassanjameelapp.com/en/api/finance/index"
     
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.get(url)
@@ -1565,7 +1566,7 @@ async def get_model_trims_from_catalog(brand: str, model: str, year: int) -> lis
                 trim_set.add(clean_name)
 
     unique_list = list(set(trim_set))
-    return list(unique_list)[:4]  # نرجع حتى 5 فئات
+    return list(unique_list)[:5]  # نرجع حتى 5 فئات
 
 # ── AI fallback ─────────────────────────────────────────────────
 async def ai_fallback(brand, model, year, source_ids, key):
@@ -1578,37 +1579,24 @@ async def ai_fallback(brand, model, year, source_ids, key):
     if catalog_trims:
         trims_hint = (
             f"EXACTLY these official trim names :"
-            f"{json.dumps(catalog_trims, ensure_ascii=False)} in Saudi."
+            f"{json.dumps(catalog_trims, ensure_ascii=False)} {year} {brand} {model} ."
         )
     else:
         trims_hint = "ALL official trims for {year} {brand} {model} in Saudi"
 
-    prompt = f"""Saudi automotive market for: {year} {brand} {model}. SAR.
+    prompt = f"""KSA car market pricing expert. Vehicle: {year} {brand} {model}. Date: {datetime.now().strftime('%B %Y')}.
 Sources: {', '.join(names)}.
+PRICING TIERS (never return 0, always best estimate):
+T1=exact known price→confidence:high | T2=adjacent year/trim interpolated→confidence:medium,explain in priceNote | T3=market logic estimate→confidence:low,note it
+
+KSA PRICING RULES: All SAR+15%VAT. Dealer=MSRP±3%, Private(Haraj)=MSRP-4~9%, Syarah/Motory=MSRP-0~5%. YoY increase~3%.
+
+RULES: {trims_hint} | 4+ listings/source/trim | vary location+seller | priceType:exact|interpolated|estimated per listing | NO imageUrl/sellerName/URLs→use "" | priceNote Arabic reasoning | isAIFallback:false if any T1/T2 used
+
 Return ONLY valid JSON no markdown:
-{{"vehicle":"{year} {brand} {model}","brand":"{brand}","model":"{model}","year":{year},"searchDate":"{datetime.now().strftime('%B %Y')}","isAIFallback":true,"officialPriceRange":{{"min":0,"max":0}},"marketInsight":"Arabic","trims":[{{"officialName":"","officialNameAr":"","officialMSRP":0,"engine":"","commonAliases":["a1"],"listings":[{{"source":"syarah","sourceName":"Syarah.com","listedAs":"text","matchConfidence":"high","matchReason":"Arabic","condition":"جديدة","price":0,"mileage":"0 كم","location":"city","priceNote":"","sellerType":"dealer","sellerName":"","postedDaysAgo":0,"imageUrl":""}}],"priceAnalysis":{{"marketMin":0,"marketMax":0,"marketAvg":0,"vsOfficialPct":0,"trend":"stable"}}}}],"competitorAnalysis":{{"summary":"Arabic","opportunities":["Arabic"],"threats":["Arabic"],"recommendation":"Arabic"}}}}
-RULES:
-1. {trims_hint}
-2. For EACH source, provide MULTIPLE listings (3-5) per source showing price range.
-3. For each trim, calculate and include: lowest ,highest ,average price across all listings for this trim.
-4. Use realistic current Saudi market prices (SAR) with natural variation."""
+{{"vehicle":"{year} {brand} {model}","brand":"{brand}","model":"{model}","year":{year},"searchDate":"{datetime.now().strftime('%B %Y')}","isAIFallback":true,"officialPriceRange":{{"min":0,"max":0}},"marketInsight":"Arabic","trims":[{{"officialName":"","officialNameAr":"","officialMSRP":0,"engine":"","commonAliases":["a1"],"listings":[{{"source":"syarah","sourceName":"Syarah.com","listedAs":"Arabic","priceType":"exact|interpolated|estimated","matchConfidence":"high|medium|low","condition":"جديدة","price":0,"mileage":"0 كم","location":"city","priceNote":"Arabic","sellerType":"dealer","sellerName":"","postedDaysAgo":3,"imageUrl":""}}],"priceAnalysis":{{"marketMin":0,"marketMax":0,"marketAvg":0,"vsOfficialPct":0,"trend":"stable"}}}}],"competitorAnalysis":{{"summary":"Arabic","opportunities":["Arabic"],"threats":["Arabic"],"recommendation":"Arabic"}}}}"""
+    await cache_set('ai_fallback_prompt', {"content":prompt})  # Cache the prompt for debugging
 
-# 5. Ensure price ranges reflect real market diversity (dealer vs private, location differences, etc.).
-# 6. Output MUST be strictly valid JSON.
-# 7. No trailing commas, no comments.
-
-#     prompt = f"""Saudi automotive market for: {year} {brand} {model}. SAR. HJ Motors Eastern Province.
-# Sources: {', '.join(names)}. Playwright scrapers returned no data — generate realistic fallback.
-# Return ONLY valid JSON no markdown:
-# {{"vehicle":"{year} {brand} {model}","brand":"{brand}","model":"{model}","year":{year},"searchDate":"{datetime.now().strftime('%B %Y')}","isAIFallback":true,"officialPriceRange":{{"min":0,"max":0}},"marketInsight":"Arabic","priceHistory":[{{"month":"Oct 25","avg":0}},{{"month":"Nov 25","avg":0}},{{"month":"Dec 25","avg":0}},{{"month":"Jan 26","avg":0}},{{"month":"Feb 26","avg":0}},{{"month":"Mar 26","avg":0}}],"trims":[{{"officialName":"","officialNameAr":"","officialMSRP":0,"engine":"","commonAliases":["a1"],"listings":[{{"source":"syarah","sourceName":"Syarah.com","listedAs":"text","matchConfidence":"high","matchReason":"Arabic","condition":"جديدة","price":0,"mileage":"0 كم","location":"city","priceNote":"","sellerType":"dealer","sellerName":"","postedDaysAgo":0,"imageUrl":""}}],"priceAnalysis":{{"marketMin":0,"marketMax":0,"marketAvg":0,"vsOfficialPct":0,"trend":"stable"}}}}],"competitorAnalysis":{{"summary":"Arabic","opportunities":["Arabic"],"threats":["Arabic"],"recommendation":"Arabic"}}}}
-# RULES:
-# 1. ALL official trims for {year} {brand} {model} in Saudi
-# 2. Yaris 2026: Y / Y Plus / Y Limited (أسعار حقيقية: Y=57,000 | Y Plus=66,700 | Y Limited=69,690)
-# 3. Camry 2026: SE/XSE/LE/XLE/XLE-V6/XSE-V6/Hybrid-XSE/Hybrid-XLE/Platinum
-# 4. Patrol 2026: SE/S/SV/SL/Platinum/Titanium
-# 5. 3-5 listings per trim from {', '.join(names[:3])}
-# 6. priceHistory: realistic 6-month trend in SAR
-# 7. CRITICAL: use REAL current Saudi market prices, NOT inflated estimates"""
     
     print(f"AI prompt: {prompt}")  # Log the prompt for debugging
     try:
@@ -1626,7 +1614,7 @@ RULES:
                     },
                   json={
                     "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 20000,
+                    "max_tokens": 30000,
                     "temperature": 0.2,
                     "system": "You are a Saudi automotive market expert. Return strictly valid JSON only.",
                     "messages": [
@@ -1849,6 +1837,11 @@ async def search(req: SearchRequest):
     cached = await cache_get(cache_key)
     if cached: return cached
 
+# ✅ تعطيل مصدر معين حسب البراند
+    if req.brand and req.brand.lower() != "lexus":
+        if "lexus_sa" in sources_store:
+            sources_store["lexus_sa"]["enabled"] = False
+
     active = sorted(
         [s for s in sources_store.values() if s["enabled"] and
          (req.source_ids is None or s["id"] in req.source_ids)],
@@ -2067,8 +2060,28 @@ async def get_catalog():
     if cached:
         return cached
     else:
-        raise HTTPException(status_code=404, detail="Catalog not cached. Please fetch first using POST /catalog/fetch")
+        try:
+         catalog = await fetch_car_catalog()
+         await cache_set("car_catalog", catalog.dict(), ttl=None)  # Cache for 24 hours
+         cached = await cache_get("car_catalog")
+         if cached:
+          return cached
+         else:
+          raise HTTPException(status_code=404, detail="Catalog not cached. Please fetch first using POST /catalog/fetch")
+        except Exception as e:
+         raise HTTPException(status_code=404, detail="Catalog not cached. Please fetch first using POST /catalog/fetch")
 
+
+@app.get("/aiFallbackPrompt")
+async def get_ai_fallback_prompt():
+    cached = await cache_get("ai_fallback_prompt")
+    if cached:
+         return {
+        "status": "ok",
+        "prompt": cached,
+       }
+    else:
+        raise HTTPException(status_code=404, detail="AI fallback prompt not found.")
 # ── Health ──────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
