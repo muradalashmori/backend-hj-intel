@@ -50,14 +50,22 @@ TRIM_CONFIG: dict[tuple, list[TrimDefinition]] = {
         TrimDefinition("CAM26-LE",          "Camry LE",            "كامري LE",               117070, "2.5L 201hp 8AT",       ["camry le ","كامري ال اي","le بنزين"], 0.90),
         TrimDefinition("CAM26-EPLUS-HEV",   "Camry E Plus HEV",    "كامري E بلس هايبرد",    111550, "2.5L HEV 226hp E-CVT", ["e plus hev","e plus","e بلس","e+"], 0.92),
         TrimDefinition("CAM26-E-HEV",       "Camry E HEV",         "كامري E هايبرد",         106605, "2.5L HEV 226hp E-CVT", ["e hev","e هايبرد","هايبرد عادي","كامري هايبرد"], 0.88),
-        TrimDefinition("CAM26-E",           "Camry E",             "كامري E",                105340, "2.5L 201hp 8AT",       ["camry e ","كامري عادي","ستاندرد","e بنزين"], 0.85),
+        TrimDefinition("CAM26-E",           "Camry E",             "كامري E",                105340, "2.5L 201hp 8AT",
+            ["camry e ","كامري عادي","ستاندرد","e بنزين",
+             "base","بيس","عادي","كامري الاي"," e كامري"], 0.85),
     ],
 
     # ─── Toyota Yaris 2026 ───────────────────────────────────────
     ("toyota", "yaris"): [
-        TrimDefinition("YAR26-YLIMITED", "Yaris Y Limited", "يارس Y ليمتد", 69690, "1.5L 107hp CVT", ["y limited","y ليمتد","ليمتد","limited","يارس فل"], 0.95),
-        TrimDefinition("YAR26-YPLUS",   "Yaris Y Plus",    "يارس Y بلس",   66700, "1.5L 107hp CVT", ["y plus","y بلاس","بلاس","plus","نص فل"], 0.92),
-        TrimDefinition("YAR26-Y",       "Yaris Y",         "يارس Y",        57500, "1.5L 107hp CVT", ["yaris y ","يارس واي","يارس عادي","ستاندرد"], 0.85),
+        TrimDefinition("YAR26-YLIMITED", "Yaris Y Limited", "يارس Y ليمتد", 69690, "1.5L 107hp CVT",
+            ["y limited","y ليمتد","ليمتد","limited","يارس فل",
+             "full option","فل اوبشن","واي ليمتد","y lim","ylimited"], 0.95),
+        TrimDefinition("YAR26-YPLUS",   "Yaris Y Plus",    "يارس Y بلس",   66700, "1.5L 107hp CVT",
+            ["y plus","y بلاس","واي بلس","بلاس","plus","نص فل",
+             "y+","yplus","half option","نص اوبشن"], 0.92),
+        TrimDefinition("YAR26-Y",       "Yaris Y",         "يارس Y",        57500, "1.5L 107hp CVT",
+            ["yaris y ","يارس واي","يارس عادي","ستاندرد",
+             "standard","base","بيس","عادي","واي عادي"," y "], 0.85),
     ],
 
     # ─── Toyota Land Cruiser 2026 ────────────────────────────────
@@ -126,26 +134,46 @@ def get_all_configured() -> list[dict]:
 
 def normalize_from_config(title: str, brand: str, model: str) -> tuple[str, str, float]:
     """
-    Match a marketplace listing title to official trim using TRIM_CONFIG.
-    Returns: (official_name, match_reason, confidence_score)
+    يطابق عنوان الإعلان مع الفئة الرسمية.
+    محسّن لدعم:
+    - الكلمات المفتاحية الدقيقة (عربي + إنجليزي)
+    - الاختصارات الشائعة (YX, Y+, ...)
+    - المطابقة الجزئية كـ fallback
     """
     trims = get_trims(brand, model)
     if not trims:
         return f"{model} Standard", "لا توجد فئات محددة", 0.50
 
-    t = title.lower()
+    t = title.lower().strip()
+
+    # الجولة الأولى: مطابقة keywords دقيقة
     for trim in trims:
         for kw in trim.keywords:
-            if kw and kw in t:
+            if kw and len(kw) >= 2 and kw in t:
                 return trim.name, f"كلمة مفتاحية: «{kw}»", trim.match_score
 
-    # Word overlap fallback
+    # الجولة الثانية: مطابقة اسم الفئة مباشرة
+    for trim in trims:
+        trim_name_l = trim.name.lower()
+        trim_ar_l   = trim.name_ar.lower()
+        if trim_name_l in t or trim_ar_l in t:
+            return trim.name, f"اسم الفئة: «{trim.name}»", trim.match_score
+
+    # الجولة الثالثة: أبحث عن الفئة باستخدام السعر
+    # (لو ما في نص كافٍ للتطابق، استخدم السعر القريب من MSRP)
+    # هذا يُطبّق في _price_in_range مسبقاً
+
+    # الجولة الرابعة: Word overlap
     best, best_score = trims[-1], 0.0
     for trim in trims:
         words = [w for w in trim.name.lower().split() if len(w) > 2]
         hits = sum(1 for w in words if w in t)
-        score = (hits / len(words) * 0.3) if words else 0
+        score = (hits / len(words) * 0.4) if words else 0
         if score > best_score:
             best_score, best = score, trim
 
-    return best.name, "مطابقة جزئية", max(0.50, best_score)
+    # لو ما في تطابق واضح → أرجع الفئة الأقل ثقة (الأرخص عادة)
+    if best_score < 0.2:
+        return trims[-1].name, "لا تطابق — افتراضي", 0.40
+
+    return best.name, "مطابقة جزئية", max(0.45, best_score)

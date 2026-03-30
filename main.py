@@ -18,7 +18,7 @@ from pydantic import BaseModel
 try:
     from scraper_playwright import (
         playwright_syarah, playwright_haraj,
-        playwright_toyota_sa, playwright_motory, PLAYWRIGHT_OK
+        playwright_toyota_sa, playwright_motory, playwright_yallamotor, PLAYWRIGHT_OK
     )
     print(f"✅ Playwright scrapers loaded: {PLAYWRIGHT_OK}")
 except ImportError as e:
@@ -27,6 +27,7 @@ except ImportError as e:
     async def playwright_syarah(q, **kw): return []
     async def playwright_haraj(q, **kw): return []
     async def playwright_toyota_sa(m, **kw): return []
+    async def playwright_yallamotor(q, **kw): return []
     async def playwright_motory(q, **kw): return []
 
 # ── Optional: Redis ─────────────────────────────────────────────
@@ -48,11 +49,11 @@ _mem_cache: dict  = {}
 # ── Default Sources ─────────────────────────────────────────────
 DEFAULT_SOURCES = {
     "toyota_sa":  {"id":"toyota_sa",  "name":"Toyota.com.sa",  "name_ar":"تويوتا السعودية", "url":"https://www.toyota.com.sa",  "color":"#00C49A","enabled":True, "type":"playwright","priority":1,"search_url":"https://www.toyota.com.sa/en/models/{model}", "category":"official"},
-    "lexus_sa":   {"id":"lexus_sa",   "name":"Lexus.com.sa",   "name_ar":"لكسัส",            "url":"https://www.lexus.com.sa",    "color":"#00C49A","enabled":True, "type":"playwright","priority":1,"search_url":"https://www.lexus.com.sa/en/models/{model}", "category":"official"},
-    "motory":     {"id":"motory",     "name":"ksa.Motory.com",  "name_ar":"موتوري",          "url":"https://ksa.motory.com",          "color":"#f5a623","enabled":True, "type":"playwright","priority":2,"search_url":"https://motory.com/sa/new-cars/search?q={query}", "category":"new_cars"},
-    "haraj":      {"id":"haraj",      "name":"Haraj.com.sa",   "name_ar":"حراج",            "url":"https://haraj.com.sa",        "color":"#ff8055","enabled":True, "type":"playwright","priority":3,"search_url":"https://haraj.com.sa/search/{query}",            "category":"marketplace"},
-    "yallamotor": {"id":"yallamotor", "name":"YallaMotor",     "name_ar":"يلا موتور",       "url":"https://www.yallamotor.com",  "color":"#a78bfa","enabled":True, "type":"httpx",    "priority":4,"search_url":"https://www.yallamotor.com/new-cars/search?q={query}&country=sa", "category":"new_cars"},
-    "syarah":     {"id":"syarah",     "name":"Syarah.com",     "name_ar":"سيارة",           "url":"https://syarah.com",          "color":"#4da6ff","enabled":True, "type":"playwright","priority":5,"search_url":"https://syarah.com/filters?text={query}",        "category":"marketplace"},
+    "lexus_sa":   {"id":"lexus_sa",   "name":"Lexus.com.sa",   "name_ar":"لكسัส",            "url":"https://www.lexus.com.sa",    "color":"#00C49A","enabled":True, "type":"playwright","priority":2,"search_url":"https://www.lexus.com.sa/en/models/{model}", "category":"official"},
+    "motory":     {"id":"motory",     "name":"ksa.Motory.com",  "name_ar":"موتوري",          "url":"https://ksa.motory.com",          "color":"#f5a623","enabled":True, "type":"playwright","priority":3,"search_url":"https://motory.com/sa/new-cars/search?q={query}", "category":"new_cars"},
+    "haraj":      {"id":"haraj",      "name":"Haraj.com.sa",   "name_ar":"حراج",            "url":"https://haraj.com.sa",        "color":"#ff8055","enabled":True, "type":"playwright","priority":4,"search_url":"https://haraj.com.sa/search/{query}",            "category":"marketplace"},
+    "yallamotor": {"id":"yallamotor", "name":"YallaMotor",     "name_ar":"يلا موتور",       "url":"https://www.yallamotor.com",  "color":"#a78bfa","enabled":True, "type":"playwright",    "priority":5,"search_url":"https://ksa.yallamotor.com/ar/new-cars?query={query}&country=sa", "category":"new_cars"},
+    "syarah":     {"id":"syarah",     "name":"Syarah.com",     "name_ar":"سيارة",           "url":"https://syarah.com",          "color":"#4da6ff","enabled":True, "type":"playwright","priority":6,"search_url":"https://syarah.com/filters?text={query}",        "category":"marketplace"},
 }
 
 def _load_sources() -> dict:
@@ -632,6 +633,7 @@ class SearchRequest(BaseModel):
     year: int
     anthropic_key: str
     source_ids: Optional[list[str]] = None
+    new_only: bool = True   # افتراضي: جديدة فقط (يستثني المستعملة من Haraj)
 
 class SourceUpdate(BaseModel):
     name: Optional[str] = None
@@ -1149,7 +1151,7 @@ async def httpx_petromin(query, client):
     model_q = " ".join(parts[2:]) if len(parts) > 2 else ""
     for url in [
         f"https://www.petrominexpress.com/api/cars?make={brand}&model={model_q}&limit=12",
-        f"https://www.petrominexpress.com/api/v1/used-cars?q={_qenc(query)}&limit=12",
+        f"https://www.petrominexpress.com/api/v1/new-cars?q={_qenc(query)}&limit=12",
         f"https://petrominexpress.com/api/inventory?search={_qenc(query)}",
     ]:
         try:
@@ -1661,10 +1663,10 @@ Return ONLY valid JSON no markdown:
         print(clean_text)
         raise
 
-# ── Main search ─────────────────────────────────────────────────
+# ── Main search by playwright   ─────────────────────────────────────────────────
 @app.post("/searchAll")
 async def searchAll(req: SearchRequest):
-    cache_key = f"{req.brand}:{req.model}:{req.year}:{','.join(sorted(req.source_ids or []))}"
+    cache_key = f"searchAll_{req.brand}:{req.model}:{req.year}:{','.join(sorted(req.source_ids or []))}"
     cached = await cache_get(cache_key)
     if cached: return cached
 
@@ -1698,15 +1700,35 @@ async def searchAll(req: SearchRequest):
 
     async def run_playwright(sid):
         try:
+            # ── تمرير brand/model/year لتفعيل _price_in_range الصحيح ──
+            kw = {"brand": req.brand, "model": req.model, "year": req.year}
             if sid == "syarah":
-                return sid, await playwright_syarah(query, max_results=15)
+                results = await playwright_syarah(query, max_results=5, **kw)
+                # فلتر المستعملة — نريد الجديدة فقط لمقارنة الوكلاء
+                results = [r for r in results if "جديد" in str(r.get("condition","")).lower()
+                           or r.get("condition","") in ("New","جديدة")]
+                return sid, results
             elif sid == "haraj":
-                return sid, await playwright_haraj(query, max_results=15)
+                # حراج يجلب مستعملة — نحتفظ بها كمعلومة لكن نعلّمها
+                results = await playwright_haraj(query, max_results=15, **kw)
+                if req.new_only:
+                    # إذا new_only: احذف المستعملة تماماً
+                    results = [r for r in results if "جديد" in str(r.get("condition","")).lower()
+                               or r.get("condition","") in ("New","جديدة")]
+                return sid, results
             elif sid == "motory":
-                return sid, await playwright_motory(query, max_results=10)
+                results = await playwright_motory(query, max_results=10, **kw)
+                results = [r for r in results if "جديد" in str(r.get("condition","")).lower()
+                           or r.get("condition","") in ("New","جديدة")]
+                return sid, results
+            elif sid == "yallamotor":
+                results = await playwright_yallamotor(query, max_results=10, **kw)
+                results = [r for r in results if "جديد" in str(r.get("condition","")).lower()
+                           or r.get("condition","") in ("New","جديدة")]
+                return sid, results
             elif sid == "toyota_sa":
                 model_name = " ".join(query.split()[2:]) if len(query.split()) > 2 else req.model
-                return sid, await playwright_toyota_sa(model_name)
+                return sid, await playwright_toyota_sa(model_name, year=req.year)
             return sid, []
         except Exception as e:
             return sid, e
@@ -1757,16 +1779,16 @@ async def searchAll(req: SearchRequest):
     use_ai = len(raw) < 5
     ai_data = None
     ai_failed = False
-    if use_ai:
-        print(f"  ⚠️  Only {len(raw)} real listings — using AI fallback")
-        try:
-            ai_data = await ai_fallback(
-                req.brand, req.model, req.year,
-                [s["id"] for s in active], req.anthropic_key
-            )
-        except Exception as e:
-            print(f"AI fallback error: {e}")
-            ai_failed = True
+    # if use_ai:
+    #     print(f"  ⚠️  Only {len(raw)} real listings — using AI fallback")
+    #     try:
+    #         ai_data = await ai_fallback(
+    #             req.brand, req.model, req.year,
+    #             [s["id"] for s in active], req.anthropic_key
+    #         )
+    #     except Exception as e:
+    #         print(f"AI fallback error: {e}")
+    #         ai_failed = True
 
     print(f"  Total listings collected: {len(raw)} (AI fallback used: {use_ai})")
     # ── Merge real data with AI structure ──
@@ -1825,12 +1847,12 @@ async def searchAll(req: SearchRequest):
     await _enrich_with_history(ai_data, req.brand, req.model, req.year)
     # Compute dealer pricing recommendation (uses supply + trend + DOM)
     _attach_dealer_pricing(ai_data)
-    if ai_failed==False:
-       await cache_set(cache_key, ai_data)
+    # if ai_failed==False:
+    #    await cache_set(cache_key, ai_data)
        
     return ai_data
 
-# ── Main search ─────────────────────────────────────────────────
+# ── Main search by Ai ─────────────────────────────────────────────────
 @app.post("/search")
 async def search(req: SearchRequest):
     cache_key = f"{req.brand}:{req.model}:{req.year}:{','.join(sorted(req.source_ids or []))}"
@@ -1924,8 +1946,8 @@ async def search(req: SearchRequest):
     await _enrich_with_history(ai_data, req.brand, req.model, req.year)
     # Compute dealer pricing recommendation (uses supply + trend + DOM)
     _attach_dealer_pricing(ai_data)
-    if ai_failed==False:
-       await cache_set(cache_key, ai_data)
+    # if ai_failed==False:
+    #    await cache_set(cache_key, ai_data)
        
     return ai_data
 
@@ -1937,8 +1959,102 @@ def _attach_source_stats(data: dict):
       {"sourceName":"Haraj.com.sa", ...},
     ]
     """
+    brand = data.get("brand", "")
+    model = data.get("model", "")
+
+    # نطاقات ثابتة احتياطية (تُستخدم فقط لو MSRP=0 في trims_config)
+    _static_ranges = {
+        "yaris":         (48000,  95000),
+        "yaris cross":   (70000,  150000),
+        "urban cruiser":  (70000,  150000),
+        "raize":         (58000,  120000),
+        "veloz":         (72000,  145000),
+        "rush":          (78000,  155000),
+        "corolla":       (72000,  160000),
+        "camry":         (95000,  175000),
+        "rav4":          (90000,  200000),
+        "fortuner":      (105000, 260000),
+        "hilux":         (82000,  215000),
+        "prado":         (145000, 340000),
+        "land cruiser":  (250000, 620000),
+        "patrol":        (145000, 500000),
+    }
+
+    def _in_range(price: int, msrp: int = 0) -> bool:
+        """
+        فلتر ذكي بناءً على MSRP إذا كان متاحاً:
+          - نطاق ديناميكي: MSRP×0.85 → MSRP×1.20
+          - سعر 20% فوق الرسمي = شح استثنائي في السوق
+          - سعر 15% تحت الرسمي = صفقة استثنائية
+        إذا لم يكن MSRP متاحاً → نطاق ثابت احتياطي.
+        """
+        if price <= 0:
+            return False
+        # ── نطاق ديناميكي من MSRP (الأدق) ──────────────────────
+        if msrp and msrp > 0:
+            return int(msrp * 0.85) <= price <= int(msrp * 1.20)
+        # ── نطاق ثابت احتياطي ────────────────────────────────────
+        model_l = (model or "").lower()
+        for key, (lo, hi) in _static_ranges.items():
+            if key in model_l:
+                return lo <= price <= hi
+        return 25000 <= price <= 700000
+
     for trim in data.get("trims", []):
         listings = trim.get("listings", [])
+        # MSRP من trims_config — يُستخدم للفلتر الديناميكي
+        trim_msrp = trim.get("officialMSRP", 0) or 0
+
+        # ── فلتر مركزي: احذف أسعار خارج النطاق + حدّد نوع الإعلان ──
+        cleaned = []
+        for l in listings:
+            price = l.get("price", 0)
+            if not price or not _in_range(price, trim_msrp):
+                continue
+            # تصنيف الإعلان: جديدة / مستعملة
+            condition = str(l.get("condition", "")).strip()
+            src_id = l.get("source", "")
+            if not condition:
+                if src_id in ("toyota_sa", "motory", "yallamotor"):
+                    l["condition"] = "جديدة"
+                elif src_id == "haraj":
+                    l["condition"] = "مستعملة"
+
+            # VAT status — تحليل ذكي بناءً على المصدر + MSRP + شكل الرقم
+            if not l.get("vat_status"):
+                try:
+                    from scraper_playwright import infer_vat_status
+                    # مرّر نص الإعلان لاكتشاف ذكر الضريبة صراحةً
+                    listing_text = " ".join(filter(None, [
+                        l.get("listedAs",""),
+                        l.get("priceNote",""),
+                        l.get("note",""),
+                    ]))
+                    vat = infer_vat_status(price, trim_msrp, src_id,
+                                           listing_text=listing_text)
+                    l["vat_status"]   = vat["vat_status"]
+                    l["vat_confidence"] = vat["confidence"]
+                    l["price_ex_vat"] = vat["price_ex_vat"]
+                    l["price_inc_vat"]= vat["price_inc_vat"]
+                    l["priceNote"]    = l.get("priceNote") or vat["reason"]
+                    # لو السعر بدون VAT — نحوّله لشامل للمقارنة العادلة
+                    if vat["vat_status"] == "excluded" and vat.get("confidence") in ("high","medium"):
+                        l["price_original"] = price        # الأصل بدون VAT
+                        l["price"]          = vat["price_inc_vat"]  # نستخدم شامل VAT
+                except Exception as e:
+                    # fallback بسيط
+                    if src_id == "haraj":
+                        l["vat_status"] = "unknown"
+                        l["priceNote"]  = l.get("priceNote") or "قد لا يشمل VAT"
+                    else:
+                        l["vat_status"] = "included"
+                        l["priceNote"]  = l.get("priceNote") or "شامل VAT 15%"
+
+            cleaned.append(l)
+
+        trim["listings"] = cleaned
+        listings = cleaned
+
         by_source: dict = {}
 
         for l in listings:
@@ -2086,6 +2202,14 @@ async def get_ai_fallback_prompt():
 @app.get("/health")
 async def health():
     r = await _get_redis()
+    # جلب حالة الـ scrapers
+    scrape_health = {}
+    try:
+        from scraper_playwright import get_scrape_health
+        scrape_health = get_scrape_health()
+    except:
+        pass
+
     return {
         "status": "ok",
         "sources": len(sources_store),
@@ -2094,6 +2218,7 @@ async def health():
         "redis": r is not None,
         "cache_ttl": CACHE_TTL,
         "mem_cache": len(_mem_cache),
+        "scrapers": scrape_health,
     }
 
 @app.delete("/cache")
