@@ -18,7 +18,7 @@ from pydantic import BaseModel
 try:
     from scraper_playwright import (
         playwright_syarah, playwright_haraj,
-        playwright_toyota_sa, playwright_motory, playwright_yallamotor, PLAYWRIGHT_OK
+        playwright_toyota_sa, playwright_lexus_sa, playwright_motory, playwright_yallamotor, PLAYWRIGHT_OK
     )
     print(f"✅ Playwright scrapers loaded: {PLAYWRIGHT_OK}")
 except ImportError as e:
@@ -27,6 +27,7 @@ except ImportError as e:
     async def playwright_syarah(q, **kw): return []
     async def playwright_haraj(q, **kw): return []
     async def playwright_toyota_sa(m, **kw): return []
+    async def playwright_lexus_sa(m, **kw): return []
     async def playwright_yallamotor(q, **kw): return []
     async def playwright_motory(q, **kw): return []
 
@@ -1664,9 +1665,9 @@ Return ONLY valid JSON no markdown:
         raise
 
 # ── Main search by playwright   ─────────────────────────────────────────────────
-@app.post("/searchAll")
-async def searchAll(req: SearchRequest):
-    cache_key = f"searchAll_{req.brand}:{req.model}:{req.year}:{','.join(sorted(req.source_ids or []))}"
+@app.post("/searchByURL")
+async def searchByURL(req: SearchRequest):
+    cache_key = f"searchByURL_{req.brand}:{req.model}:{req.year}:{','.join(sorted(req.source_ids or []))}"
     cached = await cache_get(cache_key)
     if cached: return cached
 
@@ -1702,33 +1703,50 @@ async def searchAll(req: SearchRequest):
         try:
             # ── تمرير brand/model/year لتفعيل _price_in_range الصحيح ──
             kw = {"brand": req.brand, "model": req.model, "year": req.year}
+            used_keywords = ["مستعمل", "مستعملة", "used", "pre-owned"]
             if sid == "syarah":
-                results = await playwright_syarah(query, max_results=5, **kw)
+                results = await playwright_syarah(query, max_results=20, **kw)
+                # print(f"  [Syarah]after playwright_syarah results: {len(results)}")
                 # فلتر المستعملة — نريد الجديدة فقط لمقارنة الوكلاء
-                results = [r for r in results if "جديد" in str(r.get("condition","")).lower()
-                           or r.get("condition","") in ("New","جديدة")]
+                results = [
+                        r for r in results
+                        if not any(k in str(r.get("condition", "")).lower() for k in used_keywords)
+                    ]
                 return sid, results
             elif sid == "haraj":
                 # حراج يجلب مستعملة — نحتفظ بها كمعلومة لكن نعلّمها
-                results = await playwright_haraj(query, max_results=15, **kw)
-                if req.new_only:
+                results = await playwright_haraj(query, max_results=20, **kw)
+                # print(f"  [Haraj]after playwright_haraj results: {results}")
                     # إذا new_only: احذف المستعملة تماماً
-                    results = [r for r in results if "جديد" in str(r.get("condition","")).lower()
-                               or r.get("condition","") in ("New","جديدة")]
+                # results = [
+                #         r for r in results
+                #         if not any(k in str(r.get("condition", "")).lower() for k in used_keywords)
+                #     ]
                 return sid, results
             elif sid == "motory":
-                results = await playwright_motory(query, max_results=10, **kw)
+                results = await playwright_motory(query, max_results=20, **kw)
                 results = [r for r in results if "جديد" in str(r.get("condition","")).lower()
                            or r.get("condition","") in ("New","جديدة")]
                 return sid, results
             elif sid == "yallamotor":
-                results = await playwright_yallamotor(query, max_results=10, **kw)
-                results = [r for r in results if "جديد" in str(r.get("condition","")).lower()
-                           or r.get("condition","") in ("New","جديدة")]
+                results = await playwright_yallamotor(query, max_results=20, **kw)
+                # print(f"  [YallaMotor]after playwright_yallamotor results: {len(results)}")
+                 # فلتر المستعملة — نريد الجديدة فقط لمقارنة الوكلاء
+                results = [
+                        r for r in results
+                        if not any(k in str(r.get("condition", "")).lower() for k in used_keywords)
+                                       ]
+                # print(f"  [YallaMotor]after filtering used: {len(results)}")
                 return sid, results
-            elif sid == "toyota_sa":
+            if sid == "toyota_sa" and req.brand.lower() == "toyota":
                 model_name = " ".join(query.split()[2:]) if len(query.split()) > 2 else req.model
                 return sid, await playwright_toyota_sa(model_name, year=req.year)
+            elif sid == "lexus_sa" and req.brand.lower() == "lexus":
+                model_name = " ".join(query.split()[2:]) if len(query.split()) > 2 else req.model
+                results= await playwright_lexus_sa(model_name, year=req.year)
+                # print(f"  [Lexus SA]after playwright_lexus_sa results: {results}")
+                return sid,results 
+          
             return sid, []
         except Exception as e:
             return sid, e
@@ -1755,6 +1773,7 @@ async def searchAll(req: SearchRequest):
                     print(f"  ⚠️  {sid}: 0 results via Playwright")
 
     # ── Run httpx scrapers ──
+    print(f"Starting httpx tasks for sources: {httpx_tasks}")
     if httpx_tasks:
         hclient = httpx.AsyncClient(
             headers={"User-Agent":"Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36"},
@@ -1775,42 +1794,14 @@ async def searchAll(req: SearchRequest):
                     statuses[sid] = {"ok": True, "count": len(result), "method": "httpx"}
                     raw.extend(result)
 
-    # ── AI fallback if not enough data ──
-    use_ai = len(raw) < 5
-    ai_data = None
-    ai_failed = False
-    # if use_ai:
-    #     print(f"  ⚠️  Only {len(raw)} real listings — using AI fallback")
-    #     try:
-    #         ai_data = await ai_fallback(
-    #             req.brand, req.model, req.year,
-    #             [s["id"] for s in active], req.anthropic_key
-    #         )
-    #     except Exception as e:
-    #         print(f"AI fallback error: {e}")
-    #         ai_failed = True
+    use_ai =False
+    data = None
 
     print(f"  Total listings collected: {len(raw)} (AI fallback used: {use_ai})")
-    # ── Merge real data with AI structure ──
-    if ai_data and raw:
-        # Get dynamic trims for accurate matching
-        dyn_trims = await fetch_official_trims(req.brand, req.model, req.year, req.anthropic_key)
-        print(f"  Fetched {len(dyn_trims)} dynamic trims for matching")
-        for l in raw:
-            name, reason, conf = normalize_trim_dynamic(l.get("listedAs",""), req.brand, req.model, dyn_trims)
-            l.update({
-                "matchReason": reason,
-                "matchConfidence": "high" if conf>0.85 else "medium" if conf>0.65 else "low"
-            })
-            t = next((t for t in ai_data.get("trims",[]) if t["officialName"]==name), None)
-            if t: t["listings"].append(l)
-            elif ai_data.get("trims"): ai_data["trims"][0]["listings"].append(l)
-
-    elif not ai_data:
-        print(f"real data only, no AI fallback — total {len(raw)} listings")
-        prices = [l["price"] for l in raw if l.get("price")]
-        avg = int(sum(prices)/len(prices)) if prices else 0
-        ai_data = {
+    print(f"real data only, no AI fallback — total {len(raw)} listings")
+    prices = [l["price"] for l in raw if l.get("price")]
+    avg = int(sum(prices)/len(prices)) if prices else 0
+    data = {
             "vehicle": f"{req.year} {req.brand} {req.model}",
             "brand": req.brand, "model": req.model, "year": req.year,
             "searchDate": datetime.now().strftime("%B %Y"), "isAIFallback": False,
@@ -1819,8 +1810,8 @@ async def searchAll(req: SearchRequest):
             "priceHistory": [],
             "competitorAnalysis": {"summary":"","opportunities":[],"threats":[],"recommendation":""},
             "trims": [{
-                "officialName": f"{req.model} Market",
-                "officialNameAr": f"سوق {req.model}",
+                "officialName": f"{req.model} ",
+                "officialNameAr": f" {req.model}",
                 "officialMSRP": avg, "engine": "", "commonAliases": [],
                 "listings": raw,
                 "priceAnalysis": {
@@ -1829,32 +1820,31 @@ async def searchAll(req: SearchRequest):
                     "marketAvg": avg, "vsOfficialPct": 0, "trend": "stable"
                 }
             }],
-        }
+    }
 
     # ── حساب إحصائيات كل مصدر لكل فئة ──
-    _attach_source_stats(ai_data)
-    print(f"  Source stats attached for {len(ai_data.get('trims', []))} trims")
-    ai_data.update({
+    _attach_source_stats(data)
+    print(f"  Source stats attached for {len(data.get('trims', []))} trims")
+    data.update({
         "sourceStatuses": statuses,
         "scrapedCount": len(raw),
         "isAIFallback": use_ai,
         "playwrightUsed": playwright_enabled,
     })
     # Save price snapshots + DOM records (only for real scraped data)
-    if not use_ai:
-        await _post_search_persist(ai_data, req.brand, req.model, req.year)
+    await _post_search_persist(data, req.brand, req.model, req.year)
     # Enrich with historical trend + days-on-market (from Redis)
-    await _enrich_with_history(ai_data, req.brand, req.model, req.year)
+    await _enrich_with_history(data, req.brand, req.model, req.year)
     # Compute dealer pricing recommendation (uses supply + trend + DOM)
-    _attach_dealer_pricing(ai_data)
+    _attach_dealer_pricing(data)
     # if ai_failed==False:
-    #    await cache_set(cache_key, ai_data)
+    #    await cache_set(cache_key, data)
        
-    return ai_data
+    return data
 
 # ── Main search by Ai ─────────────────────────────────────────────────
-@app.post("/search")
-async def search(req: SearchRequest):
+@app.post("/searchByAI")
+async def searchByAI(req: SearchRequest):
     cache_key = f"{req.brand}:{req.model}:{req.year}:{','.join(sorted(req.source_ids or []))}"
     cached = await cache_get(cache_key)
     if cached: return cached
@@ -1918,8 +1908,8 @@ async def search(req: SearchRequest):
             "priceHistory": [],
             "competitorAnalysis": {"summary":"","opportunities":[],"threats":[],"recommendation":""},
             "trims": [{
-                "officialName": f"{req.model} Market",
-                "officialNameAr": f"سوق {req.model}",
+                "officialName": f"{req.model} ",
+                "officialNameAr": f" {req.model}",
                 "officialMSRP": avg, "engine": "", "commonAliases": [],
                 "listings": raw,
                 "priceAnalysis": {
@@ -1931,7 +1921,7 @@ async def search(req: SearchRequest):
         }
 
     # ── حساب إحصائيات كل مصدر لكل فئة ──
-    _attach_source_stats(ai_data)
+    # _attach_source_stats(ai_data)
     print(f"  Source stats attached for {len(ai_data.get('trims', []))} trims")
     ai_data.update({
         "sourceStatuses": statuses,
@@ -2009,8 +1999,8 @@ def _attach_source_stats(data: dict):
         cleaned = []
         for l in listings:
             price = l.get("price", 0)
-            if not price or not _in_range(price, trim_msrp):
-                continue
+            # if not price or not _in_range(price, trim_msrp):
+            #     continue
             # تصنيف الإعلان: جديدة / مستعملة
             condition = str(l.get("condition", "")).strip()
             src_id = l.get("source", "")
@@ -2037,10 +2027,7 @@ def _attach_source_stats(data: dict):
                     l["price_ex_vat"] = vat["price_ex_vat"]
                     l["price_inc_vat"]= vat["price_inc_vat"]
                     l["priceNote"]    = l.get("priceNote") or vat["reason"]
-                    # لو السعر بدون VAT — نحوّله لشامل للمقارنة العادلة
-                    if vat["vat_status"] == "excluded" and vat.get("confidence") in ("high","medium"):
-                        l["price_original"] = price        # الأصل بدون VAT
-                        l["price"]          = vat["price_inc_vat"]  # نستخدم شامل VAT
+
                 except Exception as e:
                     # fallback بسيط
                     if src_id == "haraj":

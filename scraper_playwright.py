@@ -71,8 +71,11 @@ def _price_in_range(price: int, brand: str = "", model: str = "",
       سعر 130,000 → مرفوض (مبالغ 72% فوق الرسمي)
       سعر 88,000  → مقبول (+16%)
     """
+    print(f" _price_in_range price: {price}")
     if price <= 0:
         return False
+    
+    # return True  # تعطيل فلتر السعر مؤقتاً لاختبار بقية المنطق
 
     # ── نطاق ديناميكي من MSRP ──────────────────────────────────
     if msrp and msrp > 0:
@@ -465,7 +468,7 @@ async def _with_retry(coro_fn, source_id: str, max_retries: int = 0):
             last_error = e
             if attempt < max_retries:
                 wait = (attempt + 1) * 2
-                #print(f"  [{source_id}] محاولة {attempt+1} فشلت ({e}) — انتظر {wait}ث")
+                print(f"  [{source_id}] محاولة {attempt+1} فشلت ({e}) — انتظر {wait}ث")
                 import asyncio
                 await asyncio.sleep(wait)
 
@@ -527,10 +530,17 @@ async def playwright_syarah(query: str, max_results: int = 15,
     parts = query.split()
     brand_slug = brand.lower().replace(" ", "-") if brand else (parts[2].lower() if len(parts) > 2 else "toyota")
     model_slug = model.lower().replace(" ", "-") if model else (parts[3].lower() if len(parts) > 3 else parts[-1].lower())
-    year_val   = year or (int(parts[0]) if parts and parts[0].isdigit() else 2026)
+    year_val   = year or (int(parts[0]) if parts and parts[0].isdigit() else 0)
 
     urls_to_try = [
-        f"https://syarah.com/filters?text={query.replace(' ', '%20')}&fromRecentSearch=1",
+        # URL الأساسي الصحيح — صفحة الموديل مع فلتر السنة
+        f"https://syarah.com/autos/{brand_slug}/{model_slug}/{year_val}?type=new",
+        f"https://syarah.com/cars/{brand_slug}/{model_slug}?year={year_val}&type=new",
+        f"https://syarah.com/cars/{brand_slug}/{model_slug}?year={year_val}",
+        f"https://syarah.com/cars/{brand_slug}/{model_slug}",
+        # fallback — البحث النصي
+        f"https://syarah.com/filters?make={brand_slug}&model={model_slug}&year={year_val}&type=new",
+        f"https://syarah.com/search?q={brand_slug}+{model_slug}+{year_val}",
     ]
 
     async def _do_syarah():
@@ -553,10 +563,10 @@ async def playwright_syarah(query: str, max_results: int = 15,
             found = []
             for url in urls_to_try:
                 try:
-                    #print(f"  [Syarah] {url}")
-                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    print(f"  [Syarah] {url}")
+                    await page.goto(url, wait_until="domcontentloaded", timeout=90000)
                     # try:
-                    #     await page.wait_for_load_state("networkidle", timeout=30000)
+                    #     await page.wait_for_load_state("networkidle", timeout=90000)
                     # except:
                     #     await asyncio.sleep(3)
 
@@ -564,40 +574,33 @@ async def playwright_syarah(query: str, max_results: int = 15,
                     try:
                         await page.wait_for_selector(
                             "[class*='posts-card'][class*='posts-card-body'][class*='car-card'],[class*='CarCard'],[class*='listing-card'],article,[data-car-id]",
-                            timeout=30000)
+                            timeout=90000)
                     except:
                         await asyncio.sleep(3)
                   
                     
 
-                      # 🔥 أهم سطر
-                    html = await page.evaluate("""
-                    () => {
-                        document.querySelectorAll('script').forEach(e => e.remove());
-                        document.querySelectorAll('style').forEach(e => e.remove());
-                        return document.body.innerHTML;
-                    }
-                    """)
-                    # html = await page.content()
-                    #print(f"  [Syarah] html: {html}")
+                    # ✅ page.content() يحتفظ بـ __NEXT_DATA__ scripts
+                    html = await page.content()
+                    print(f"  [Syarah] HTML size: {len(html)} chars")
                     found = _syarah_from_next_data(html, brand, model, year_val)
-                    #print(f" _syarah_from_next_data: {len(found)} results")
+                    print(f" _syarah_from_next_data: {len(found)} results")
                     if found: break
                     for _, body in api_data:
                         found.extend(_syarah_from_api(body, brand, model))
 
-                    #print(f" _syarah_from_api: {len(found)} results")    
+                    print(f" _syarah_from_api: {len(found)} results")    
                     if found: break
-                    found = _syarah_from_html(html, brand, model)
-                    #print(f" _syarah_from_html: {len(found)} results") 
+                    found = _syarah_from_html(html, brand, model, year)
+                    print(f" _syarah_from_html: {len(found)} results") 
                     if found: break
                 except Exception as e:
-                    print(f"  [Syarah] url error: {e}")
+                    print(f"  [Syarah] url :{url} error: {e}")
             await browser.close()
             return found
 
     results = await _with_retry(_do_syarah, "syarah")
-    #print(f"  [Syarah]_do_syarah results: {results}")
+    print(f"  [Syarah]_do_syarah results: {results}")
     return [r for r in results if _price_in_range(r["price"], brand, model)][:max_results]
 
 
@@ -676,47 +679,48 @@ def _syarah_from_api(data, brand, model):
 
 
 
-def _syarah_from_html(html, brand, model):
+def _syarah_from_html(html, brand, model, year):
     out = []
     seen = set()
 
     soup = BeautifulSoup(html, "html.parser")
-    #print(f" [Syarah] Parsed HTML, looking for price blocks...")
+    print(f" [Syarah] Parsed HTML, looking for price blocks...")
     # =========================
     # 1️⃣ PRIMARY: CSS SELECTOR
     # =========================
     price_blocks = soup.select('[id^="posts-card-cash-price"]')
     
-    #print(f" [Syarah] Found {price_blocks} price blocks with CSS selector")
+    print(f" [Syarah] Found {price_blocks} price blocks with CSS selector")
     for block in price_blocks:
-        #print(f" [Syarah] Processing price block: {block}")
+        print(f" [Syarah] Processing price block: {block}")
         try:
             price_tag = block.select_one('.font-bold')
-            #print(f" [Syarah] Found price tag: {price_tag}")
+            print(f" [Syarah] Found price tag: {price_tag}")
             if not price_tag:
                 continue
 
             raw_price = price_tag.get_text(strip=True)
-            #print(f" [Syarah] Raw price: {raw_price}")
+            print(f" [Syarah] Raw price: {raw_price}")
             price = _clean_price(raw_price)
-            #print(f" [Syarah] Cleaned price: {price}")
+            print(f" [Syarah] Cleaned price: {price}")
             if not price:
                 continue
 
             # ❌ فلترة التقسيط (حماية قوية)
             full_text = block.get_text(" ", strip=True)
+            print(f" [Syarah] Full text: {full_text}")
             if "التقسيط" in full_text or "شهري" in full_text:
                 continue
-
+            print(f" [Syarah] continue price: {price}")
             if price < 10000:
                 continue
-
+            print(f" [Syarah] continue > price: {price}")
             if price in seen:
                 continue
-
-            if not _price_in_range(price, brand, model):
-                continue
-
+            print(f" [Syarah] continue not in seen price: {price}")
+            # if not _price_in_range(price, brand, model):
+            #     continue
+            print(f" [Syarah] continue _price_in_range price: {price}") 
             seen.add(price)
 
             card = block.find_parent("a")
@@ -736,11 +740,26 @@ def _syarah_from_html(html, brand, model):
                 if mileage_tag:
                     mileage = mileage_tag.get_text(strip=True)
 
+            condition = "غير محدد"
+
+            if card:
+                # 1️⃣ من الـ tags
+                tags = card.select('#posts-card-tags-container span')
+                for t in tags:
+                    txt = t.get_text(strip=True).lower()
+                    if "مستعمل" in txt:
+                        condition = "مستعملة"
+                        break
+                    elif "جديد" in txt:
+                        condition = "جديدة"
+                        break
+
+               
             out.append(_L(
                 "syarah",
                 "Syarah.com",
                 title.strip(),
-                "مستعملة",
+                condition,
                 price,
                 mileage,
                 "غير محدد",
@@ -748,7 +767,7 @@ def _syarah_from_html(html, brand, model):
                 "dealer",
                 0,
                 _default_img(f"{brand} {model}"),
-                f"https://syarah.com{url}" if url else "",
+                f"https://syarah.com/cars/{brand}/{model}/{year}" if url else "",
                 "",
                 "low",
                 "Syarah — HYBRID CSS"
@@ -809,6 +828,7 @@ def _syarah_from_html(html, brand, model):
                 ))
 
     return out
+
 # ══════════════════════════════════════════════════════════════════
 #  HARAJ SCRAPER
 # ══════════════════════════════════════════════════════════════════
@@ -836,8 +856,8 @@ async def playwright_haraj(query: str, max_results: int = 15,
             found = []
             for url in urls_to_try:
                 try:
-                    #print(f"  [Haraj] {url}")
-                    await page.goto(url, wait_until="networkidle", timeout=30000)
+                    print(f"  [Haraj] {url}")
+                    await page.goto(url, wait_until="networkidle", timeout=90000)
                     try:
                         await page.wait_for_selector(
                             "[class*='post'],[class*='item'],[class*='card'],.post-title",
@@ -845,15 +865,9 @@ async def playwright_haraj(query: str, max_results: int = 15,
                     except:
                         await asyncio.sleep(3)
 
-                    html = await page.evaluate("""
-                    () => {
-                        document.querySelectorAll('script').forEach(e => e.remove());
-                        document.querySelectorAll('style').forEach(e => e.remove());
-                        return document.body.innerHTML;
-                    }
-                    """)
-                    # html = await page.content()
-                    #print(f"  [Haraj] html: {html}")
+                    # ✅ page.content() يحتفظ بـ __NEXT_DATA__ scripts
+                    html = await page.content()
+                    print(f"  [Haraj] HTML size: {len(html)} chars")
                     found = _haraj_from_next_data(html, brand, model, year)
                     if found: break
                     found = _haraj_from_html(html, brand, model)
@@ -978,18 +992,48 @@ def _haraj_from_html(html, brand, model):
     out = []
     seen = set()
 
-    patterns = [
-        r'(?:السعر|بسعر|Price|يباع)[^\d]{0,20}([\d,،]{5,8})',
-        r'([\d,،]{5,8})\s*(?:ريال|SAR|﷼)',
-        r'(?:ريال|SAR|﷼)\s*([\d,،]{5,8})',
-        r'(\d{2,3}(?:,\d{3})+)',  # 🔥 جديد
-    ]
+    soup = BeautifulSoup(html, "html.parser")
 
-    for pat in patterns:
-        for raw in re.findall(pat, html, re.IGNORECASE):
-            price = _clean_price(str(raw))
+    # كل الكروت
+    cards = soup.select('[data-testid="post-item"]')
 
-            if not price or price in seen:
+    for card in cards:
+        try:
+            # =========================
+            # 1️⃣ استخراج العنوان
+            # =========================
+            title_tag = card.select_one('h3')
+            print(f"  [haraj] title_tag: {title_tag} ")
+            title = title_tag.get_text(strip=True) if title_tag else f"{brand} {model}"
+            title_l = title.lower()
+            print(f"  [haraj] title_l: {title_l} ")
+            # =========================
+            # 2️⃣ استخراج السعر
+            # =========================
+            price = None
+
+            # الطريقة الأساسية
+            price_tag = card.select_one('[data-testid="sar-currency-svg-component"]')
+            print(f"  [haraj] price_tag: {price_tag} ")
+            if price_tag:
+                parent = price_tag.find_parent("div")
+                print(f"  [haraj] parent: {parent} ")
+                if parent:
+                    raw_price = parent.get_text(strip=True)
+                    price = _clean_price(raw_price)
+
+            # fallback regex
+            if not price:
+                text = card.get_text(" ", strip=True)
+                matches = re.findall(r'(\d{2,3}(?:,\d{3})+)', text)
+                print(f"  [haraj] matches: {matches} ")
+                if matches:
+                    price = _clean_price(matches[0])
+
+            if not price or price < 10000:
+                continue
+
+            if price in seen:
                 continue
 
             if not _price_in_range(price, brand, model):
@@ -997,26 +1041,60 @@ def _haraj_from_html(html, brand, model):
 
             seen.add(price)
 
+            # =========================
+            # 3️⃣ تحديد الحالة (ذكي)
+            # =========================
+            new_keywords = ["جديد", "وكالة", "صفر", "لم تستخدم", "بدون استخدام"]
+            used_keywords = ["مستعمل", "مستخدمة", "ممشى", "عداد"]
+
+            condition = "مستعملة"  # default (حراج غالباً مستعمل)
+
+            if any(k in title_l for k in new_keywords):
+                condition = "جديدة"
+            elif any(k in title_l for k in used_keywords):
+                condition = "مستعملة"
+
+            # =========================
+            # 4️⃣ الرابط
+            # =========================
+            url = ""
+            link_tag = card.select_one('a[href]')
+            if link_tag:
+                url = link_tag.get("href", "")
+
+            # =========================
+            # 5️⃣ الموقع
+            # =========================
+            location = "غير محدد"
+            loc_tag = card.select_one('a[href*="/city/"] span:last-child')
+            if loc_tag:
+                location = loc_tag.get_text(strip=True)
+
+            # =========================
+            # 6️⃣ إضافة النتيجة
+            # =========================
             out.append(_L(
                 "haraj",
                 "Haraj.com.sa",
-                f"{brand} {model}".strip(),
-                "مستعملة",
+                title,
+                condition,
                 price,
                 "غير محدد",
-                "غير محدد",
+                location,
                 "بائع حراج",
                 "individual",
                 0,
                 _default_img(f"{brand} {model}"),
-                f"https://haraj.com.sa/search/{brand}+{model}",
+                f"https://haraj.com.sa{url}" if url else "",
                 "لا يمكن التحقق من الضريبة",
                 "low",
-                "حراج — HTML"
+                "حراج — HTML (SMART)"
             ))
 
-    return out
+        except Exception as e:
+            continue
 
+    return out
 
 # =========================================
 # 🔥 استخراج السعر من النص
@@ -1065,12 +1143,29 @@ def _haraj_smart_find_cars(data):
 # ══════════════════════════════════════════════════════════════════
 #  TOYOTA.COM.SA SCRAPER
 # ══════════════════════════════════════════════════════════════════
-
+MODEL_MAP = {
+    "urban cruiser": "urbancruiser",
+    "landcruiser wagon": "lc300-gas",
+    "landcruiser hard-top": "lc70hardtop",
+    "rav 4": "rav4",
+    "hiace Van": "hiacevan",
+    "corolla Cross": "corollacross",
+    "LandCruiser Pick-up": "lc70pickup",
+    "hilux single cab": "hiluxsc",
+    "hilux double cab": "hiluxdc",
+}
 async def playwright_toyota_sa(model: str, year: int = 0) -> list[dict]:
     if not PLAYWRIGHT_OK:
         return []
 
-    slug = model.lower().replace(" ","-")
+    model_key = model.lower().strip()
+
+    # 🔥 استبدال إذا موجود في الماب
+    if model_key in MODEL_MAP:
+        slug = MODEL_MAP[model_key]
+    else:
+        slug = model_key.replace(" ", "-")
+
     urls = [
          f"https://www.toyota.com.sa/en/vehicles/passenger/{slug}",
          f"https://www.toyota.com.sa/en/vehicles/commercial/{slug}",
@@ -1085,27 +1180,20 @@ async def playwright_toyota_sa(model: str, year: int = 0) -> list[dict]:
             found = []
             for url in urls:
                 try:
-                    #print(f"  [Toyota SA] {url}")
-                    resp = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    print(f"  [Toyota SA] {url}")
+                    resp = await page.goto(url, wait_until="domcontentloaded", timeout=90000)
                     if not resp or resp.status >= 400: continue
                     try:
                         await page.wait_for_load_state("networkidle", timeout=10000)
                     except:
                         await asyncio.sleep(3)
-                    # html = await page.content()
-                    html = await page.evaluate("""
-                    () => {
-                        document.querySelectorAll('script').forEach(e => e.remove());
-                        document.querySelectorAll('style').forEach(e => e.remove());
-                        return document.body.innerHTML;
-                    }
-                    """)
-                    #print(f"  [Toyota SA] html: {html}")
+                    html = await page.content()
+                    # print(f"  [Toyota SA] html: {html}")
                     found = _toyota_from_next_data(html, model)
-                    #print(f" _toyota_from_next_data: {len(found)} results")
+                    print(f" _toyota_from_next_data: {len(found)} results")
                     if found: break
-                    found = _toyota_from_html(html, model)
-                    #print(f" _toyota_from_html: {len(found)} results")
+                    found = _toyota_from_html(html, model,url)
+                    print(f" _toyota_from_html: {len(found)} results")
                     if found: break
                 except Exception as e:
                     print(f"  [Toyota SA] url error: {e}")
@@ -1166,7 +1254,7 @@ def _toyota_from_next_data(html, model):
     return out
 
 
-def _toyota_from_html(html, model):
+def _toyota_from_html(html, model, url):
  
     out = []
 
@@ -1190,7 +1278,7 @@ def _toyota_from_html(html, model):
     soup = BeautifulSoup(html, "html.parser")
 
     # 🔥 رابط الموديل
-    model_url = f"https://www.toyota.com.sa/en/models/{model.lower().replace(' ','-')}"
+    model_url = url if url else f"https://www.toyota.com.sa/en/vehicles/{model.lower().replace(' ','-')}"
 
     # 🔥 البحث فقط داخل pricing div
      # 🔥 المرور على كل كرت سيارة
@@ -1277,10 +1365,199 @@ def _toyota_from_html(html, model):
                 break
 
         except Exception as e:
-            #print(f"[Toyota card parsing error] {e}")
+            print(f"[Toyota card parsing error] {e}")
             continue
     return out
+# ══════════════════════════════════════════════════════════════════
+#  LEXUS.COM.SA SCRAPER
+# ══════════════════════════════════════════════════════════════════
 
+async def playwright_lexus_sa(model: str, year: int = 0) -> list[dict]:
+    if not PLAYWRIGHT_OK:
+        return []
+
+    slug = model.lower().replace(" ","-")
+    urls = [
+         f"https://www.lexus.com.sa/en/{slug}",
+    ]
+    async def _do_lexus():
+        async with async_playwright() as pw:
+            browser = await _make_browser(pw)
+            ctx     = await _make_context(browser)
+            page    = await ctx.new_page()
+            await page.route("**/*.{png,jpg,jpeg,gif,webp,woff,woff2,mp4,svg}", lambda r: r.abort())
+            found = []
+            for url in urls:
+                try:
+                    print(f"  [Lexus SA] {url}")
+                    resp = await page.goto(url, wait_until="domcontentloaded", timeout=90000)
+                    if not resp or resp.status >= 400: continue
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=10000)
+                    except:
+                        await asyncio.sleep(3)
+                    html = await page.content()
+                    # print(f"  [Lexus SA] html: {html}")
+                    found = _lexus_from_next_data(html, model)
+                    # print(f" _lexus_from_next_data: {len(found)} results")
+                    if found: break
+                    found = _lexus_from_html(html, model)
+                    # print(f" _lexus_from_html: {len(found)} results")
+                    if found: break
+                except Exception as e:
+                    print(f"  [Lexus SA] url error: {e}")
+            await browser.close()
+            return found
+
+    results = await _with_retry(_do_lexus, "lexus_sa")
+    return results
+
+
+def _lexus_from_next_data(html, model):
+    m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
+    if not m: return []
+    try: data = json.loads(m.group(1))
+    except: return []
+
+    paths = [
+        ["props","pageProps","grades"],
+        ["props","pageProps","trims"],
+        ["props","pageProps","variants"],
+        ["props","pageProps","model","grades"],
+        ["props","pageProps","data","grades"],
+        ["props","pageProps","modelData","grades"],
+        ["props","pageProps","pageData","grades"],
+    ]
+    trims = None
+    for path in paths:
+        node = data
+        for k in path:
+            node = node.get(k) if isinstance(node,dict) else None
+            if node is None: break
+        if isinstance(node,list) and len(node) > 0:
+            trims = node; break
+    if not trims:
+        trims = _smart_find_cars(data)
+    if not trims: return []
+
+    out = []
+    for trim in trims[:12]:
+        if not isinstance(trim,dict): continue
+        price = 0
+        for pk in ["price","cashPrice","msrp","startingPrice","listPrice","selling_price","base_price","amount"]:
+            raw = trim.get(pk)
+            if raw:
+                price = _clean_price(str(raw))
+                if price: break
+        if not price: continue
+        name = _clean_text(trim.get("name") or trim.get("gradeName") or trim.get("grade") or
+                           trim.get("trimName") or trim.get("title") or model)
+        out.append(_L("toyota_sa","Toyota.com.sa (رسمي)",
+            f"Toyota {model} {name} — سعر رسمي",
+            "جديدة", price, "0 كم", "المملكة العربية السعودية",
+            "هاشم جميل موتورز — المعتمد","official_dealer", 0,
+            _default_img(model),
+            f"https://www.lexus.com.sa/en/models/{model.lower().replace(' ','-')}",
+            "سعر رسمي من الوكيل المعتمد",
+            "high", f"Lexus.com.sa — فئة {name}"))
+    return out
+
+
+def _lexus_from_html(html, model):
+    out = []
+    seen = set()
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    model_url = f"https://www.lexus.com.sa/en/{model.lower().replace(' ','-')}"
+
+    # =========================
+    # 1️⃣ العثور على قسم الأسعار
+    # =========================
+    price_section = None
+
+    for box in soup.select('.accordion-box'):
+        title = box.get("data-gtm-property-title", "").lower()
+        if "engine" in title or "specs" in box.get("data-gtm-property-section", ""):
+            price_section = box
+            break
+
+    if not price_section:
+        return out
+
+    # =========================
+    # 2️⃣ أول LI يحتوي الأسعار
+    # =========================
+    first_li = price_section.select_one('ul > li')
+    if not first_li:
+        return out
+
+    trims = first_li.select('.right-text')
+
+    # =========================
+    # 3️⃣ استخراج البيانات
+    # =========================
+    for t in trims:
+        try:
+            h5 = t.find("h5")
+            if not h5:
+                continue
+
+            full_text = h5.get_text(" ", strip=True)
+
+            # ✅ استخراج السعر
+            price_tag = h5.select_one('.price-inline span')
+            if not price_tag:
+                continue
+
+            raw_price = price_tag.get_text(strip=True)
+
+            # دعم الأرقام العربية
+            price_match = re.search(r'([\d,]{5,8})', raw_price)
+
+            if not price_match:
+                continue
+
+            price = _clean_price(price_match.group(1))
+
+            if not price or price < 10000:
+                continue
+
+            # ✅ استخراج اسم الفئة (بدون السعر)
+            trim_name = re.sub(r'\d{2,3},\d{3}', '', full_text)
+            trim_name = trim_name.replace("", "").strip()
+
+            key = (trim_name.lower(), price)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            # =========================
+            # 4️⃣ إضافة النتيجة
+            # =========================
+            out.append(_L(
+                "lexus_sa",
+                "Lexus.com.sa",
+                f"Lexus {model} {trim_name}",
+                "جديدة",
+                price,
+                "0 كم",
+                "المملكة العربية السعودية",
+                "عبداللطيف جميل — المعتمد",
+                "official_dealer",
+                0,
+                _default_img(model),
+                model_url,
+                "من جدول المواصفات",
+                "high",
+                "Lexus — SPEC TABLE"
+            ))
+
+        except Exception as e:
+            print(f"[Lexus SPEC parsing error] {e}")
+            continue
+
+    return out
 # ══════════════════════════════════════════════════════════════════
 #  MOTORY SCRAPER
 # ══════════════════════════════════════════════════════════════════
@@ -1292,7 +1569,7 @@ async def playwright_motory(query: str, max_results: int = 10,
 
     b = brand.lower().replace(" ","-") if brand else "toyota"
     mo = model.lower().replace(" ","-") if model else "yaris"
-    yr = year or 2026
+    yr = year or 0
 
     urls_to_try = [
         f"https://ksa.motory.com/en/new-cars/{b}/{mo}/{yr}"
@@ -1310,8 +1587,8 @@ async def playwright_motory(query: str, max_results: int = 10,
             found = []
             for url in urls_to_try:
                 try:
-                    #print(f"  [Motory] {url}")
-                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    print(f"  [Motory] {url}")
+                    await page.goto(url, wait_until="domcontentloaded", timeout=90000)
                     try:
                         await page.wait_for_load_state("networkidle", timeout=8000)
                     except:
@@ -1319,7 +1596,7 @@ async def playwright_motory(query: str, max_results: int = 10,
                     html = await page.content()
                     found = _motory_from_next_data(html, brand, model, yr)
                     if found: break
-                    found = _motory_from_html(html, brand, model)
+                    found = _motory_from_html(html, brand, model, year)
                     if found: break
                 except Exception as e:
                     print(f"  [Motory] url error: {e}")
@@ -1378,7 +1655,7 @@ def _motory_from_next_data(html, brand, model, year):
     return out
 
 
-def _motory_from_html(html, brand, model):
+def _motory_from_html(html, brand, model, year):
     out = []
     seen = set()
     for pat in [
@@ -1395,7 +1672,7 @@ def _motory_from_html(html, brand, model):
                 f"{brand} {model}".strip(),"جديدة",price,"0 كم",
                 "المملكة العربية السعودية","Motory","dealer",0,
                 _default_img(f"{brand} {model}"),
-                f"https://motory.com/sa/new-cars/{brand.lower()}/{model.lower()}",
+                f"https://ksa.motory.com/en/new-cars/{brand.lower()}/{model.lower()}/{year}",
                 "","medium","Motory — HTML"))
     return out
 
@@ -1404,7 +1681,7 @@ def _motory_from_html(html, brand, model):
 #  YALLAMOTOR SCRAPER
 # ══════════════════════════════════════════════════════════════════
 
-async def playwright_yallamotor(query: str, max_results: int = 10,
+async def playwright_yallamotorhttp(query: str, max_results: int = 10,
                                   brand: str = "", model: str = "", year: int = 0) -> list[dict]:
     import httpx
     b = brand.lower() if brand else "toyota"
@@ -1426,7 +1703,7 @@ async def playwright_yallamotor(query: str, max_results: int = 10,
             try:
                 r = await client.get(url)
                 ct = r.headers.get("content-type","")
-                #print(f"  [YallaMotor] {url.split('yallamotor.com')[1][:50]} → {r.status_code}")
+                print(f"  [YallaMotor] {url.split('yallamotor.com')[1][:50]} → {r.status_code}")
                 if r.status_code != 200: continue
 
                 if "json" in ct:
@@ -1478,11 +1755,258 @@ async def playwright_yallamotor(query: str, max_results: int = 10,
     return results[:max_results]
 
 
+async def playwright_yallamotor(query: str, max_results: int = 15,
+                              brand: str = "", model: str = "", year: int = 0) -> list[dict]:
+    if not PLAYWRIGHT_OK:
+        return []
+
+    parts = query.split()
+    brand_slug = brand.lower().replace(" ", "-") if brand else (parts[2].lower() if len(parts) > 2 else "toyota")
+    model_slug = model.lower().replace(" ", "-") if model else (parts[3].lower() if len(parts) > 3 else parts[-1].lower())
+    year_val   = year or (int(parts[0]) if parts and parts[0].isdigit() else 2026)
+
+    urls_to_try = [
+        # URL الأساسي الصحيح — صفحة الموديل مع فلتر السنة
+         f"https://ksa.yallamotor.com/en/new-cars/{brand_slug}/{model_slug}/{year_val}",
+    ]
+
+    async def _do_yallamotor():
+        async with async_playwright() as pw:
+            browser = await _make_browser(pw)
+            ctx     = await _make_context(browser)
+
+            api_data = []
+            async def capture(response):
+                if any(x in response.url for x in ["/api/","/v1/","/v2/","cars","vehicles"]):
+                    ct = response.headers.get("content-type","")
+                    if "json" in ct:
+                        try: api_data.append((response.url, await response.json()))
+                        except: pass
+
+            page = await ctx.new_page()
+            await page.route("**/*.{png,jpg,jpeg,gif,webp,woff,woff2,ttf,svg}", lambda r: r.abort())
+            page.on("response", capture)
+
+            found = []
+            for url in urls_to_try:
+                try:
+                    print(f"  [Syarah] {url}")
+                    await page.goto(url, wait_until="domcontentloaded", timeout=90000)
+                    # try:
+                    #     await page.wait_for_load_state("networkidle", timeout=90000)
+                    # except:
+                    #     await asyncio.sleep(3)
+
+      
+                    try:
+                        await page.wait_for_selector(
+                            "[class*='posts-card'][class*='posts-card-body'][class*='car-card'],[class*='CarCard'],[class*='listing-card'],article,[data-car-id]",
+                            timeout=90000)
+                    except:
+                        await asyncio.sleep(3)
+                  
+                    
+
+                    # ✅ page.content() يحتفظ بـ __NEXT_DATA__ scripts
+                    html = await page.content()
+                    print(f"  [YallaMotor] HTML size: {len(html)} chars")
+                    found = _yallamotor_from_next_data(html, brand, model, year)
+                    print(f" _yallamotor_from_next_data: {len(found)} results")
+                    if found: break
+                    for _, body in api_data:
+                        found.extend(_yallamotor_from_api(body, brand, model))
+
+                    print(f" _syarah_from_api: {len(found)} results")    
+                    if found: break
+                    found = _yallamotor_from_html(html, brand, model, year)
+                    print(f" _yallamotor_from_html: {len(found)} results") 
+                    if found: break
+                except Exception as e:
+                    print(f"  [YallaMotor] url :{url} error: {e}")
+            await browser.close()
+            return found
+
+    results = await _with_retry(_do_yallamotor, "yallamotor")
+    print(f"  [yallamotor]_do_yallamotor results: {results}")
+    return [r for r in results if _price_in_range(r["price"], brand, model)][:max_results]
+
+
+def _yallamotor_from_next_data(html, brand, model, year):
+    m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
+    if not m: return []
+    try: data = json.loads(m.group(1))
+    except: return []
+
+    paths = [
+        ["props","pageProps","cars"],
+        ["props","pageProps","vehicles"],
+        ["props","pageProps","listings"],
+        ["props","pageProps","data","cars"],
+        ["props","pageProps","data","listings"],
+        ["props","pageProps","initialData","cars"],
+        ["props","pageProps","carsData","cars"],
+        ["props","pageProps","searchResults"],
+    ]
+    cars = _smart_find_cars(data)
+    if not cars: return []
+
+    out = []
+    for car in cars[:20]:
+        if not isinstance(car,dict): continue
+        # ── فلتر السنة ────────────────────────────────────────
+        if not _matches_year(car, year): continue
+        # ── فلتر الموديل ──────────────────────────────────────
+        title_check = car.get("title") or car.get("name") or car.get("car_name") or ""
+        if not _matches_model(title_check, brand, model): continue
+
+        price = 0
+        for pk in ["price","cash_price","selling_price","salePrice","cashPrice","amount"]:
+            raw = car.get(pk)
+            if raw:
+                price = _clean_price(str(raw))
+                if price: break
+        if not price: continue
+        vat = _normalize_price_vat(price, "syarah")
+        is_new = car.get("is_new") or car.get("type")=="new" or not car.get("mileage")
+        out.append(_L("syarah","Syarah.com",
+            _clean_text(car.get("title") or car.get("name") or f"{brand} {model}"),
+            "جديدة" if is_new else "مستعملة", price,
+            f"{car.get('mileage',0):,} كم" if car.get("mileage") else "0 كم",
+            car.get("city") or car.get("region") or "غير محدد",
+            car.get("seller_name") or "Syarah",
+            "dealer" if car.get("is_dealer") else "individual",
+            _parse_days(car.get("created_at") or ""),
+            car.get("main_image") or car.get("image") or _default_img(f"{brand} {model}"),
+            f"https://ksa.yallamotor.com/ar/new-cars?query={car.get('id','')}",
+            "", "high", "YallaMotor — NEXT_DATA JSON"))
+    return out
+
+
+def _yallamotor_from_api(data, brand, model):
+    cars = _smart_find_cars(data)
+    if not cars: return []
+    out = []
+    for car in cars[:15]:
+        if not isinstance(car,dict): continue
+        price = 0
+        for pk in ["price","cash_price","selling_price","salePrice"]:
+            if car.get(pk):
+                price = _clean_price(str(car[pk]))
+                if price: break
+        if not price: continue
+        out.append(_L("syarah","Syarah.com",
+            _clean_text(car.get("title") or car.get("name") or f"{brand} {model}"),
+            "جديدة" if not car.get("mileage") else "مستعملة", price,
+            "0 كم", car.get("city") or "غير محدد",
+            car.get("seller_name") or "Syarah", "dealer", 0,
+            _default_img(f"{brand} {model}"),
+            f"https://ksa.yallamotor.com/ar/new-cars?query={car.get('id','')}",
+            "", "high", "YallaMotor — API"))
+    return out
+
+
+def _yallamotor_from_html(html, brand, model, year):
+    out = []
+    seen = set()
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # كل الكروت
+    cards = soup.select('div.flex.flex-col.gap-4')
+    print(f"  [YallaMotor] Found {len(cards)} potential car cards in HTML")
+    for card in cards:
+        try:
+            # =========================
+            # 1️⃣ العنوان
+            # =========================
+            title_tag = card.select_one('h3')
+            print(f"  [YallaMotor] title_tag: {title_tag} ")
+            if not title_tag:
+                continue
+
+            title = title_tag.get_text(strip=True)
+            title_l = title.lower()
+            print(f"  [YallaMotor] title_l: {title_l} ")
+            # =========================
+            # 2️⃣ السعر
+            # =========================
+            price = None
+
+            price_divs = card.find_all(string=re.compile(r"SAR"))
+            print(f"  [YallaMotor] price_divs: {price_divs} ")
+            for p in price_divs:
+                print(f"  [YallaMotor] price candidate: {p} ")
+                raw = str(p)
+                print(f"  [YallaMotor] raw price text: {raw} ")
+                match = re.search(r'([\d٠-٩,٬]{5,10})', raw)
+                print(f"  [YallaMotor] price match: {match} ")
+                if match:
+                    price = _clean_price(match.group(1))
+                    break
+
+            if not price or price < 10000:
+                continue
+
+            if price in seen:
+                continue
+
+            seen.add(price)
+
+            # =========================
+            # 3️⃣ الرابط
+            # =========================
+            url = ""
+            link_tag = card.select_one('a[href]')
+            if link_tag:
+                url = link_tag.get("href", "")
+
+            # =========================
+            # 4️⃣ الحالة (🔥 الأهم)
+            # =========================
+            condition = "جديدة"  # default
+
+            if url:
+                url_l = url.lower()
+
+                if "new-cars" in url_l:
+                    condition = "جديدة"
+                elif "used-cars" in url_l:
+                    condition = "مستعملة"
+
+            # fallback من النص (احتياطي)
+            if "مستعمل" in title_l:
+                condition = "مستعملة"
+
+            # =========================
+            # 5️⃣ إضافة النتيجة
+            # =========================
+            out.append(_L(
+                "yallamotor",
+                "YallaMotor.com",
+                title,
+                condition,
+                price,
+                "0 كم" if condition == "جديدة" else "غير محدد",
+                "غير محدد",
+                "YallaMotor",
+                "dealer",
+                0,
+                _default_img(title),
+                f"https://ksa.yallamotor.com/en/new-cars/{brand}/{model}/{year}" if url else "",
+                "",
+                "low",
+                "YallaMotor — SMART"
+            ))
+
+        except Exception:
+            continue
+
+    return out
 # ── Runner للاختبار ──────────────────────────────────────────────
 
 async def run_test(query: str = "2026 Toyota Yaris"):
     brand, model, year = "Toyota", "Yaris", 2026
-    #print(f"\n{'='*55}\nاختبار: {query}\n{'='*55}")
+    print(f"\n{'='*55}\nاختبار: {query}\n{'='*55}")
     for name, coro in [
         ("Syarah",     playwright_syarah(query, brand=brand, model=model, year=year)),
         ("Haraj",      playwright_haraj(query, brand=brand, model=model, year=year)),
