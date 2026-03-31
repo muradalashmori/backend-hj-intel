@@ -465,7 +465,7 @@ async def _with_retry(coro_fn, source_id: str, max_retries: int = 0):
             last_error = e
             if attempt < max_retries:
                 wait = (attempt + 1) * 2
-                print(f"  [{source_id}] محاولة {attempt+1} فشلت ({e}) — انتظر {wait}ث")
+                #print(f"  [{source_id}] محاولة {attempt+1} فشلت ({e}) — انتظر {wait}ث")
                 import asyncio
                 await asyncio.sleep(wait)
 
@@ -553,10 +553,10 @@ async def playwright_syarah(query: str, max_results: int = 15,
             found = []
             for url in urls_to_try:
                 try:
-                    print(f"  [Syarah] {url}")
-                    await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                    #print(f"  [Syarah] {url}")
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
                     # try:
-                    #     await page.wait_for_load_state("networkidle", timeout=60000)
+                    #     await page.wait_for_load_state("networkidle", timeout=30000)
                     # except:
                     #     await asyncio.sleep(3)
 
@@ -564,7 +564,7 @@ async def playwright_syarah(query: str, max_results: int = 15,
                     try:
                         await page.wait_for_selector(
                             "[class*='posts-card'][class*='posts-card-body'][class*='car-card'],[class*='CarCard'],[class*='listing-card'],article,[data-car-id]",
-                            timeout=60000)
+                            timeout=30000)
                     except:
                         await asyncio.sleep(3)
                   
@@ -579,17 +579,17 @@ async def playwright_syarah(query: str, max_results: int = 15,
                     }
                     """)
                     # html = await page.content()
-                    print(f"  [Syarah] html: {html}")
+                    #print(f"  [Syarah] html: {html}")
                     found = _syarah_from_next_data(html, brand, model, year_val)
-                    print(f" _syarah_from_next_data: {len(found)} results")
+                    #print(f" _syarah_from_next_data: {len(found)} results")
                     if found: break
                     for _, body in api_data:
                         found.extend(_syarah_from_api(body, brand, model))
 
-                    print(f" _syarah_from_api: {len(found)} results")    
+                    #print(f" _syarah_from_api: {len(found)} results")    
                     if found: break
                     found = _syarah_from_html(html, brand, model)
-                    print(f" _syarah_from_html: {len(found)} results") 
+                    #print(f" _syarah_from_html: {len(found)} results") 
                     if found: break
                 except Exception as e:
                     print(f"  [Syarah] url error: {e}")
@@ -597,7 +597,7 @@ async def playwright_syarah(query: str, max_results: int = 15,
             return found
 
     results = await _with_retry(_do_syarah, "syarah")
-    print(f"  [Syarah]_do_syarah results: {results}")
+    #print(f"  [Syarah]_do_syarah results: {results}")
     return [r for r in results if _price_in_range(r["price"], brand, model)][:max_results]
 
 
@@ -681,25 +681,25 @@ def _syarah_from_html(html, brand, model):
     seen = set()
 
     soup = BeautifulSoup(html, "html.parser")
-    print(f" [Syarah] Parsed HTML, looking for price blocks...")
+    #print(f" [Syarah] Parsed HTML, looking for price blocks...")
     # =========================
     # 1️⃣ PRIMARY: CSS SELECTOR
     # =========================
     price_blocks = soup.select('[id^="posts-card-cash-price"]')
     
-    print(f" [Syarah] Found {price_blocks} price blocks with CSS selector")
+    #print(f" [Syarah] Found {price_blocks} price blocks with CSS selector")
     for block in price_blocks:
-        print(f" [Syarah] Processing price block: {block}")
+        #print(f" [Syarah] Processing price block: {block}")
         try:
             price_tag = block.select_one('.font-bold')
-            print(f" [Syarah] Found price tag: {price_tag}")
+            #print(f" [Syarah] Found price tag: {price_tag}")
             if not price_tag:
                 continue
 
             raw_price = price_tag.get_text(strip=True)
-            print(f" [Syarah] Raw price: {raw_price}")
+            #print(f" [Syarah] Raw price: {raw_price}")
             price = _clean_price(raw_price)
-            print(f" [Syarah] Cleaned price: {price}")
+            #print(f" [Syarah] Cleaned price: {price}")
             if not price:
                 continue
 
@@ -836,8 +836,8 @@ async def playwright_haraj(query: str, max_results: int = 15,
             found = []
             for url in urls_to_try:
                 try:
-                    print(f"  [Haraj] {url}")
-                    await page.goto(url, wait_until="networkidle", timeout=60000)
+                    #print(f"  [Haraj] {url}")
+                    await page.goto(url, wait_until="networkidle", timeout=30000)
                     try:
                         await page.wait_for_selector(
                             "[class*='post'],[class*='item'],[class*='card'],.post-title",
@@ -853,7 +853,7 @@ async def playwright_haraj(query: str, max_results: int = 15,
                     }
                     """)
                     # html = await page.content()
-                    print(f"  [Haraj] html: {html}")
+                    #print(f"  [Haraj] html: {html}")
                     found = _haraj_from_next_data(html, brand, model, year)
                     if found: break
                     found = _haraj_from_html(html, brand, model)
@@ -1085,8 +1085,8 @@ async def playwright_toyota_sa(model: str, year: int = 0) -> list[dict]:
             found = []
             for url in urls:
                 try:
-                    print(f"  [Toyota SA] {url}")
-                    resp = await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                    #print(f"  [Toyota SA] {url}")
+                    resp = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
                     if not resp or resp.status >= 400: continue
                     try:
                         await page.wait_for_load_state("networkidle", timeout=10000)
@@ -1100,12 +1100,12 @@ async def playwright_toyota_sa(model: str, year: int = 0) -> list[dict]:
                         return document.body.innerHTML;
                     }
                     """)
-                    print(f"  [Toyota SA] html: {html}")
+                    #print(f"  [Toyota SA] html: {html}")
                     found = _toyota_from_next_data(html, model)
-                    print(f" _toyota_from_next_data: {len(found)} results")
+                    #print(f" _toyota_from_next_data: {len(found)} results")
                     if found: break
                     found = _toyota_from_html(html, model)
-                    print(f" _toyota_from_html: {len(found)} results")
+                    #print(f" _toyota_from_html: {len(found)} results")
                     if found: break
                 except Exception as e:
                     print(f"  [Toyota SA] url error: {e}")
@@ -1277,7 +1277,7 @@ def _toyota_from_html(html, model):
                 break
 
         except Exception as e:
-            print(f"[Toyota card parsing error] {e}")
+            #print(f"[Toyota card parsing error] {e}")
             continue
     return out
 
@@ -1310,8 +1310,8 @@ async def playwright_motory(query: str, max_results: int = 10,
             found = []
             for url in urls_to_try:
                 try:
-                    print(f"  [Motory] {url}")
-                    await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                    #print(f"  [Motory] {url}")
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
                     try:
                         await page.wait_for_load_state("networkidle", timeout=8000)
                     except:
@@ -1426,7 +1426,7 @@ async def playwright_yallamotor(query: str, max_results: int = 10,
             try:
                 r = await client.get(url)
                 ct = r.headers.get("content-type","")
-                print(f"  [YallaMotor] {url.split('yallamotor.com')[1][:50]} → {r.status_code}")
+                #print(f"  [YallaMotor] {url.split('yallamotor.com')[1][:50]} → {r.status_code}")
                 if r.status_code != 200: continue
 
                 if "json" in ct:
@@ -1482,7 +1482,7 @@ async def playwright_yallamotor(query: str, max_results: int = 10,
 
 async def run_test(query: str = "2026 Toyota Yaris"):
     brand, model, year = "Toyota", "Yaris", 2026
-    print(f"\n{'='*55}\nاختبار: {query}\n{'='*55}")
+    #print(f"\n{'='*55}\nاختبار: {query}\n{'='*55}")
     for name, coro in [
         ("Syarah",     playwright_syarah(query, brand=brand, model=model, year=year)),
         ("Haraj",      playwright_haraj(query, brand=brand, model=model, year=year)),
