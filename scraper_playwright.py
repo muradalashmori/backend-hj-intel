@@ -71,7 +71,7 @@ def _price_in_range(price: int, brand: str = "", model: str = "",
       سعر 130,000 → مرفوض (مبالغ 72% فوق الرسمي)
       سعر 88,000  → مقبول (+16%)
     """
-    print(f" _price_in_range price: {price}")
+    #print(f" _price_in_range price: {price}")
     if price <= 0:
         return False
     
@@ -216,7 +216,7 @@ def infer_vat_status(price: int, msrp: int = 0, source: str = "",
                 "reason":f"نص الإعلان يذكر صراحةً: بدون ضريبة | شامل VAT: {int(price*1.15):,}"}
 
     # ── 2. مصدر رسمي → دائماً شامل ─────────────────────────────
-    if source in ("toyota_sa","motory","yallamotor","syarah","lexus_sa"):
+    if source in ("toyota.com.sa","ksa.Motory.com","ksa.yallamotor.com","syarah.com","lexus.com.sa"):
         return {"vat_status":"included","confidence":"high",
                 "price_ex_vat":int(price/1.15),"price_inc_vat":price,
                 "reason":"مصدر رسمي — شامل VAT 15%"}
@@ -468,7 +468,7 @@ async def _with_retry(coro_fn, source_id: str, max_retries: int = 0):
             last_error = e
             if attempt < max_retries:
                 wait = (attempt + 1) * 2
-                print(f"  [{source_id}] محاولة {attempt+1} فشلت ({e}) — انتظر {wait}ث")
+                #print(f"  [{source_id}] محاولة {attempt+1} فشلت ({e}) — انتظر {wait}ث")
                 import asyncio
                 await asyncio.sleep(wait)
 
@@ -486,7 +486,7 @@ def get_scrape_health() -> dict:
     """
     return {
         "failures": dict(_scrape_failures),
-        "healthy":  [s for s in ["syarah","haraj","motory","toyota_sa","yallamotor"]
+        "healthy":  [s for s in ["syarah.com","haraj.com.sa","ksa.Motory.com","toyota.com.sa","ksa.yallamotor.com"]
                      if _scrape_failures.get(s, 0) < 3],
         "degraded": [s for s, c in _scrape_failures.items() if c >= 3],
     }
@@ -534,13 +534,13 @@ async def playwright_syarah(query: str, max_results: int = 15,
 
     urls_to_try = [
         # URL الأساسي الصحيح — صفحة الموديل مع فلتر السنة
-        f"https://syarah.com/autos/{brand_slug}/{model_slug}/{year_val}?type=new",
-        f"https://syarah.com/cars/{brand_slug}/{model_slug}?year={year_val}&type=new",
-        f"https://syarah.com/cars/{brand_slug}/{model_slug}?year={year_val}",
-        f"https://syarah.com/cars/{brand_slug}/{model_slug}",
+        f"https://syarah.com.com/autos/{brand_slug}/{model_slug}/{year_val}?type=new",
+        f"https://syarah.com.com/cars/{brand_slug}/{model_slug}?year={year_val}&type=new",
+        f"https://syarah.com.com/cars/{brand_slug}/{model_slug}?year={year_val}",
+        f"https://syarah.com.com/cars/{brand_slug}/{model_slug}",
         # fallback — البحث النصي
-        f"https://syarah.com/filters?make={brand_slug}&model={model_slug}&year={year_val}&type=new",
-        f"https://syarah.com/search?q={brand_slug}+{model_slug}+{year_val}",
+        f"https://syarah.com.com/filters?make={brand_slug}&model={model_slug}&year={year_val}&type=new",
+        f"https://syarah.com.com/search?q={brand_slug}+{model_slug}+{year_val}",
     ]
 
     async def _do_syarah():
@@ -563,10 +563,10 @@ async def playwright_syarah(query: str, max_results: int = 15,
             found = []
             for url in urls_to_try:
                 try:
-                    print(f"  [Syarah] {url}")
-                    await page.goto(url, wait_until="domcontentloaded", timeout=90000)
+                    #print(f"  [Syarah] {url}")
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
                     # try:
-                    #     await page.wait_for_load_state("networkidle", timeout=90000)
+                    #     await page.wait_for_load_state("networkidle", timeout=30000)
                     # except:
                     #     await asyncio.sleep(3)
 
@@ -574,7 +574,7 @@ async def playwright_syarah(query: str, max_results: int = 15,
                     try:
                         await page.wait_for_selector(
                             "[class*='posts-card'][class*='posts-card-body'][class*='car-card'],[class*='CarCard'],[class*='listing-card'],article,[data-car-id]",
-                            timeout=90000)
+                            timeout=30000)
                     except:
                         await asyncio.sleep(3)
                   
@@ -582,25 +582,25 @@ async def playwright_syarah(query: str, max_results: int = 15,
 
                     # ✅ page.content() يحتفظ بـ __NEXT_DATA__ scripts
                     html = await page.content()
-                    print(f"  [Syarah] HTML size: {len(html)} chars")
+                    #print(f"  [Syarah] HTML size: {len(html)} chars")
                     found = _syarah_from_next_data(html, brand, model, year_val)
-                    print(f" _syarah_from_next_data: {len(found)} results")
+                    #print(f" _syarah_from_next_data: {len(found)} results")
                     if found: break
                     for _, body in api_data:
                         found.extend(_syarah_from_api(body, brand, model))
 
-                    print(f" _syarah_from_api: {len(found)} results")    
+                    #print(f" _syarah_from_api: {len(found)} results")    
                     if found: break
                     found = _syarah_from_html(html, brand, model, year)
-                    print(f" _syarah_from_html: {len(found)} results") 
+                    #print(f" _syarah_from_html: {len(found)} results") 
                     if found: break
                 except Exception as e:
                     print(f"  [Syarah] url :{url} error: {e}")
             await browser.close()
             return found
 
-    results = await _with_retry(_do_syarah, "syarah")
-    print(f"  [Syarah]_do_syarah results: {results}")
+    results = await _with_retry(_do_syarah, "syarah.com")
+    #print(f"  [Syarah]_do_syarah results: {results}")
     return [r for r in results if _price_in_range(r["price"], brand, model)][:max_results]
 
 
@@ -639,9 +639,9 @@ def _syarah_from_next_data(html, brand, model, year):
                 price = _clean_price(str(raw))
                 if price: break
         if not price: continue
-        vat = _normalize_price_vat(price, "syarah")
+        vat = _normalize_price_vat(price, "syarah.com")
         is_new = car.get("is_new") or car.get("type")=="new" or not car.get("mileage")
-        out.append(_L("syarah","Syarah.com",
+        out.append(_L("syarah.com","Syarah.com",
             _clean_text(car.get("title") or car.get("name") or f"{brand} {model}"),
             "جديدة" if is_new else "مستعملة", price,
             f"{car.get('mileage',0):,} كم" if car.get("mileage") else "0 كم",
@@ -650,7 +650,7 @@ def _syarah_from_next_data(html, brand, model, year):
             "dealer" if car.get("is_dealer") else "individual",
             _parse_days(car.get("created_at") or ""),
             car.get("main_image") or car.get("image") or _default_img(f"{brand} {model}"),
-            f"https://syarah.com/filters?text={car.get('id','')}",
+            f"https://syarah.com.com/filters?text={car.get('id','')}",
             "", "high", "Syarah — NEXT_DATA JSON"))
     return out
 
@@ -667,13 +667,13 @@ def _syarah_from_api(data, brand, model):
                 price = _clean_price(str(car[pk]))
                 if price: break
         if not price: continue
-        out.append(_L("syarah","Syarah.com",
+        out.append(_L("syarah.com","Syarah.com",
             _clean_text(car.get("title") or car.get("name") or f"{brand} {model}"),
             "جديدة" if not car.get("mileage") else "مستعملة", price,
             "0 كم", car.get("city") or "غير محدد",
             car.get("seller_name") or "Syarah", "dealer", 0,
             _default_img(f"{brand} {model}"),
-            f"https://syarah.com/cars/{car.get('id','')}",
+            f"https://syarah.com.com/cars/{car.get('id','')}",
             "", "high", "Syarah — API"))
     return out
 
@@ -684,43 +684,43 @@ def _syarah_from_html(html, brand, model, year):
     seen = set()
 
     soup = BeautifulSoup(html, "html.parser")
-    print(f" [Syarah] Parsed HTML, looking for price blocks...")
+    #print(f" [Syarah] Parsed HTML, looking for price blocks...")
     # =========================
     # 1️⃣ PRIMARY: CSS SELECTOR
     # =========================
     price_blocks = soup.select('[id^="posts-card-cash-price"]')
     
-    print(f" [Syarah] Found {price_blocks} price blocks with CSS selector")
+    #print(f" [Syarah] Found {price_blocks} price blocks with CSS selector")
     for block in price_blocks:
-        print(f" [Syarah] Processing price block: {block}")
+        #print(f" [Syarah] Processing price block: {block}")
         try:
             price_tag = block.select_one('.font-bold')
-            print(f" [Syarah] Found price tag: {price_tag}")
+            #print(f" [Syarah] Found price tag: {price_tag}")
             if not price_tag:
                 continue
 
             raw_price = price_tag.get_text(strip=True)
-            print(f" [Syarah] Raw price: {raw_price}")
+            #print(f" [Syarah] Raw price: {raw_price}")
             price = _clean_price(raw_price)
-            print(f" [Syarah] Cleaned price: {price}")
+            #print(f" [Syarah] Cleaned price: {price}")
             if not price:
                 continue
 
             # ❌ فلترة التقسيط (حماية قوية)
             full_text = block.get_text(" ", strip=True)
-            print(f" [Syarah] Full text: {full_text}")
+            #print(f" [Syarah] Full text: {full_text}")
             if "التقسيط" in full_text or "شهري" in full_text:
                 continue
-            print(f" [Syarah] continue price: {price}")
+            #print(f" [Syarah] continue price: {price}")
             if price < 10000:
                 continue
-            print(f" [Syarah] continue > price: {price}")
+            #print(f" [Syarah] continue > price: {price}")
             if price in seen:
                 continue
-            print(f" [Syarah] continue not in seen price: {price}")
+            #print(f" [Syarah] continue not in seen price: {price}")
             # if not _price_in_range(price, brand, model):
             #     continue
-            print(f" [Syarah] continue _price_in_range price: {price}") 
+            #print(f" [Syarah] continue _price_in_range price: {price}") 
             seen.add(price)
 
             card = block.find_parent("a")
@@ -756,7 +756,7 @@ def _syarah_from_html(html, brand, model, year):
 
                
             out.append(_L(
-                "syarah",
+                "syarah.com",
                 "Syarah.com",
                 title.strip(),
                 condition,
@@ -767,7 +767,7 @@ def _syarah_from_html(html, brand, model, year):
                 "dealer",
                 0,
                 _default_img(f"{brand} {model}"),
-                f"https://syarah.com/cars/{brand}/{model}/{year}" if url else "",
+                f"https://syarah.com.com/cars/{brand}/{model}/{year}" if url else "",
                 "",
                 "low",
                 "Syarah — HYBRID CSS"
@@ -810,7 +810,7 @@ def _syarah_from_html(html, brand, model, year):
                 seen.add(price)
 
                 out.append(_L(
-                    "syarah",
+                    "syarah.com",
                     "Syarah.com",
                     f"{brand} {model}".strip(),
                     "مستعملة",
@@ -821,7 +821,7 @@ def _syarah_from_html(html, brand, model, year):
                     "dealer",
                     0,
                     _default_img(f"{brand} {model}"),
-                    f"https://syarah.com/search?q={brand}+{model}",
+                    f"https://syarah.com.com/search?q={brand}+{model}",
                     "",
                     "low",
                     "Syarah — HYBRID REGEX"
@@ -841,7 +841,7 @@ async def playwright_haraj(query: str, max_results: int = 15,
     year_str = str(year) if year else ""
     query_ar = f"{brand} {model} {year_str}".strip()
     urls_to_try = [
-        f"https://haraj.com.sa/search/{query.replace(' ','%20')}",
+        f"https://haraj.com.sa.com.sa/search/{query.replace(' ','%20')}",
     ]
     async def _do_haraj():
         async with async_playwright() as pw:
@@ -856,8 +856,8 @@ async def playwright_haraj(query: str, max_results: int = 15,
             found = []
             for url in urls_to_try:
                 try:
-                    print(f"  [Haraj] {url}")
-                    await page.goto(url, wait_until="networkidle", timeout=90000)
+                    #print(f"  [Haraj] {url}")
+                    await page.goto(url, wait_until="networkidle", timeout=30000)
                     try:
                         await page.wait_for_selector(
                             "[class*='post'],[class*='item'],[class*='card'],.post-title",
@@ -867,7 +867,7 @@ async def playwright_haraj(query: str, max_results: int = 15,
 
                     # ✅ page.content() يحتفظ بـ __NEXT_DATA__ scripts
                     html = await page.content()
-                    print(f"  [Haraj] HTML size: {len(html)} chars")
+                    #print(f"  [Haraj] HTML size: {len(html)} chars")
                     found = _haraj_from_next_data(html, brand, model, year)
                     if found: break
                     found = _haraj_from_html(html, brand, model)
@@ -877,7 +877,7 @@ async def playwright_haraj(query: str, max_results: int = 15,
             await browser.close()
             return found
 
-    results = await _with_retry(_do_haraj, "haraj")
+    results = await _with_retry(_do_haraj, "haraj.com.sa")
 
     return [r for r in results if _price_in_range(r["price"], brand, model)][:max_results]
 
@@ -953,7 +953,7 @@ def _haraj_from_next_data(html, brand, model, year):
             or title
         )
 
-        vat = infer_vat_status(price, 0, "haraj", listing_text=body_txt)
+        vat = infer_vat_status(price, 0, "haraj.com.sa", listing_text=body_txt)
 
         # ── الصورة ──────────────────────────
         imgs = post.get("images")
@@ -963,10 +963,10 @@ def _haraj_from_next_data(html, brand, model, year):
             img = _default_img(title)
 
         # ── الرابط ──────────────────────────
-        url = post.get("url") or f"https://haraj.com.sa/{post.get('id','')}"
+        url = post.get("url") or f"https://haraj.com.sa.com.sa/{post.get('id','')}"
 
         out.append(_L(
-            "haraj", "Haraj.com.sa",
+            "haraj.com.sa", "Haraj.com.sa",
             title or f"{brand} {model}",
             "مستعملة",
             price,
@@ -1003,10 +1003,10 @@ def _haraj_from_html(html, brand, model):
             # 1️⃣ استخراج العنوان
             # =========================
             title_tag = card.select_one('h3')
-            print(f"  [haraj] title_tag: {title_tag} ")
+            #print(f"  [haraj.com.sa] title_tag: {title_tag} ")
             title = title_tag.get_text(strip=True) if title_tag else f"{brand} {model}"
             title_l = title.lower()
-            print(f"  [haraj] title_l: {title_l} ")
+            #print(f"  [haraj.com.sa] title_l: {title_l} ")
             # =========================
             # 2️⃣ استخراج السعر
             # =========================
@@ -1014,10 +1014,10 @@ def _haraj_from_html(html, brand, model):
 
             # الطريقة الأساسية
             price_tag = card.select_one('[data-testid="sar-currency-svg-component"]')
-            print(f"  [haraj] price_tag: {price_tag} ")
+            #print(f"  [haraj.com.sa] price_tag: {price_tag} ")
             if price_tag:
                 parent = price_tag.find_parent("div")
-                print(f"  [haraj] parent: {parent} ")
+                #print(f"  [haraj.com.sa] parent: {parent} ")
                 if parent:
                     raw_price = parent.get_text(strip=True)
                     price = _clean_price(raw_price)
@@ -1026,7 +1026,7 @@ def _haraj_from_html(html, brand, model):
             if not price:
                 text = card.get_text(" ", strip=True)
                 matches = re.findall(r'(\d{2,3}(?:,\d{3})+)', text)
-                print(f"  [haraj] matches: {matches} ")
+                #print(f"  [haraj.com.sa] matches: {matches} ")
                 if matches:
                     price = _clean_price(matches[0])
 
@@ -1074,7 +1074,7 @@ def _haraj_from_html(html, brand, model):
             # 6️⃣ إضافة النتيجة
             # =========================
             out.append(_L(
-                "haraj",
+                "haraj.com.sa",
                 "Haraj.com.sa",
                 title,
                 condition,
@@ -1085,7 +1085,7 @@ def _haraj_from_html(html, brand, model):
                 "individual",
                 0,
                 _default_img(f"{brand} {model}"),
-                f"https://haraj.com.sa{url}" if url else "",
+                f"https://haraj.com.sa.com.sa{url}" if url else "",
                 "لا يمكن التحقق من الضريبة",
                 "low",
                 "حراج — HTML (SMART)"
@@ -1180,31 +1180,31 @@ async def playwright_toyota_sa(model: str, year: int = 0) -> list[dict]:
             found = []
             for url in urls:
                 try:
-                    print(f"  [Toyota SA] {url}")
-                    resp = await page.goto(url, wait_until="domcontentloaded", timeout=90000)
+                    #print(f"  [Toyota SA] {url}")
+                    resp = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
                     if not resp or resp.status >= 400: continue
                     try:
                         await page.wait_for_load_state("networkidle", timeout=10000)
                     except:
                         await asyncio.sleep(3)
                     html = await page.content()
-                    # print(f"  [Toyota SA] html: {html}")
-                    found = _toyota_from_next_data(html, model)
-                    print(f" _toyota_from_next_data: {len(found)} results")
+                    # #print(f"  [Toyota SA] html: {html}")
+                    found = _toyota_from_next_data(html, model, year)
+                    #print(f" _toyota_from_next_data: {len(found)} results")
                     if found: break
-                    found = _toyota_from_html(html, model,url)
-                    print(f" _toyota_from_html: {len(found)} results")
+                    found = _toyota_from_html(html, model, year, url)
+                    #print(f" _toyota_from_html: {len(found)} results")
                     if found: break
                 except Exception as e:
                     print(f"  [Toyota SA] url error: {e}")
             await browser.close()
             return found
 
-    results = await _with_retry(_do_toyota, "toyota_sa")
+    results = await _with_retry(_do_toyota, "toyota.com.sa")
     return results
 
 
-def _toyota_from_next_data(html, model):
+def _toyota_from_next_data(html, model, year):
     m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
     if not m: return []
     try: data = json.loads(m.group(1))
@@ -1243,18 +1243,18 @@ def _toyota_from_next_data(html, model):
         if not price: continue
         name = _clean_text(trim.get("name") or trim.get("gradeName") or trim.get("grade") or
                            trim.get("trimName") or trim.get("title") or model)
-        out.append(_L("toyota_sa","Toyota.com.sa (رسمي)",
-            f"Toyota {model} {name} — سعر رسمي",
+        out.append(_L("toyota.com.sa","Toyota.com.sa",
+            f"{name}",
             "جديدة", price, "0 كم", "المملكة العربية السعودية",
             "هاشم جميل موتورز — المعتمد","official_dealer", 0,
             _default_img(model),
             f"https://www.toyota.com.sa/en/models/{model.lower().replace(' ','-')}",
             "سعر رسمي من الوكيل المعتمد",
-            "high", f"Toyota.com.sa — فئة {name}"))
+            "high", f"Toyota.com.sa —  {name}"))
     return out
 
 
-def _toyota_from_html(html, model, url):
+def _toyota_from_html(html, model, year, url):
  
     out = []
 
@@ -1339,13 +1339,12 @@ def _toyota_from_html(html, model, url):
             label_text = label_tag.get_text(strip=True) if label_tag else ""
 
             # بناء العنوان
-            title = f"Toyota {model} {trim_name} — سعر رسمي"
-            if label_text:
-                title = f"Toyota {model} {trim_name} — {label_text} — سعر رسمي"
+            title = f"{trim_name}"
+           
 
             out.append(_L(
-                "toyota_sa",
-                "Toyota.com.sa (رسمي)",
+                "toyota.com.sa",
+                "Toyota.com.sa",
                 title,
                 "جديدة",
                 price,
@@ -1365,7 +1364,7 @@ def _toyota_from_html(html, model, url):
                 break
 
         except Exception as e:
-            print(f"[Toyota card parsing error] {e}")
+            #print(f"[Toyota card parsing error] {e}")
             continue
     return out
 # ══════════════════════════════════════════════════════════════════
@@ -1389,31 +1388,31 @@ async def playwright_lexus_sa(model: str, year: int = 0) -> list[dict]:
             found = []
             for url in urls:
                 try:
-                    print(f"  [Lexus SA] {url}")
-                    resp = await page.goto(url, wait_until="domcontentloaded", timeout=90000)
+                    #print(f"  [Lexus SA] {url}")
+                    resp = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
                     if not resp or resp.status >= 400: continue
                     try:
                         await page.wait_for_load_state("networkidle", timeout=10000)
                     except:
                         await asyncio.sleep(3)
                     html = await page.content()
-                    # print(f"  [Lexus SA] html: {html}")
-                    found = _lexus_from_next_data(html, model)
-                    # print(f" _lexus_from_next_data: {len(found)} results")
+                    # #print(f"  [Lexus SA] html: {html}")
+                    found = _lexus_from_next_data(html, model,year)
+                    # #print(f" _lexus_from_next_data: {len(found)} results")
                     if found: break
-                    found = _lexus_from_html(html, model)
-                    # print(f" _lexus_from_html: {len(found)} results")
+                    found = _lexus_from_html(html, model,year)
+                    # #print(f" _lexus_from_html: {len(found)} results")
                     if found: break
                 except Exception as e:
                     print(f"  [Lexus SA] url error: {e}")
             await browser.close()
             return found
 
-    results = await _with_retry(_do_lexus, "lexus_sa")
+    results = await _with_retry(_do_lexus, "lexus.com.sa")
     return results
 
 
-def _lexus_from_next_data(html, model):
+def _lexus_from_next_data(html, model,year):
     m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
     if not m: return []
     try: data = json.loads(m.group(1))
@@ -1452,8 +1451,8 @@ def _lexus_from_next_data(html, model):
         if not price: continue
         name = _clean_text(trim.get("name") or trim.get("gradeName") or trim.get("grade") or
                            trim.get("trimName") or trim.get("title") or model)
-        out.append(_L("toyota_sa","Toyota.com.sa (رسمي)",
-            f"Toyota {model} {name} — سعر رسمي",
+        out.append(_L("toyota.com.sa","Toyota.com.sa",
+            f"{year} {model} {name}",
             "جديدة", price, "0 كم", "المملكة العربية السعودية",
             "هاشم جميل موتورز — المعتمد","official_dealer", 0,
             _default_img(model),
@@ -1463,7 +1462,7 @@ def _lexus_from_next_data(html, model):
     return out
 
 
-def _lexus_from_html(html, model):
+def _lexus_from_html(html, model, year):
     out = []
     seen = set()
 
@@ -1536,9 +1535,9 @@ def _lexus_from_html(html, model):
             # 4️⃣ إضافة النتيجة
             # =========================
             out.append(_L(
-                "lexus_sa",
+                "lexus.com.sa",
                 "Lexus.com.sa",
-                f"Lexus {model} {trim_name}",
+                f"{year} {model} {trim_name}",
                 "جديدة",
                 price,
                 "0 كم",
@@ -1554,7 +1553,7 @@ def _lexus_from_html(html, model):
             ))
 
         except Exception as e:
-            print(f"[Lexus SPEC parsing error] {e}")
+            #print(f"[Lexus SPEC parsing error] {e}")
             continue
 
     return out
@@ -1572,11 +1571,11 @@ async def playwright_motory(query: str, max_results: int = 10,
     yr = year or 0
 
     urls_to_try = [
-        f"https://ksa.motory.com/en/new-cars/{b}/{mo}/{yr}"
-        # f"https://motory.com/sa/new-cars/{b}/{mo}/{yr}",
-        # f"https://motory.com/sa/new-cars/{b}/{mo}?year={yr}",
-        # f"https://motory.com/sa/new-cars/{b}/{mo}",
-        # f"https://motory.com/sa/new-cars/search?q={b}+{mo}+{yr}",
+        f"https://ksa.ksa.Motory.com.com/en/new-cars/{b}/{mo}/{yr}"
+        # f"https://ksa.Motory.com.com/sa/new-cars/{b}/{mo}/{yr}",
+        # f"https://ksa.Motory.com.com/sa/new-cars/{b}/{mo}?year={yr}",
+        # f"https://ksa.Motory.com.com/sa/new-cars/{b}/{mo}",
+        # f"https://ksa.Motory.com.com/sa/new-cars/search?q={b}+{mo}+{yr}",
     ]
     async def _do_motory():
         async with async_playwright() as pw:
@@ -1587,8 +1586,8 @@ async def playwright_motory(query: str, max_results: int = 10,
             found = []
             for url in urls_to_try:
                 try:
-                    print(f"  [Motory] {url}")
-                    await page.goto(url, wait_until="domcontentloaded", timeout=90000)
+                    #print(f"  [Motory] {url}")
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
                     try:
                         await page.wait_for_load_state("networkidle", timeout=8000)
                     except:
@@ -1603,7 +1602,7 @@ async def playwright_motory(query: str, max_results: int = 10,
             await browser.close()
             return found
 
-    results = await _with_retry(_do_motory, "motory")
+    results = await _with_retry(_do_motory, "ksa.Motory.com")
 
     return [r for r in results if _price_in_range(r["price"], brand, model)][:max_results]
 
@@ -1641,16 +1640,16 @@ def _motory_from_next_data(html, brand, model, year):
                 price = _clean_price(str(raw))
                 if price: break
         if not price: continue
-        vat = _normalize_price_vat(price, "motory")
+        vat = _normalize_price_vat(price, "ksa.Motory.com")
         name = _clean_text(item.get("name") or item.get("title") or item.get("trim_name") or
                            item.get("grade") or f"{brand} {model}")
-        out.append(_L("motory","Motory.com",
+        out.append(_L("ksa.Motory.com","Motory.com",
             name, "جديدة", price, "0 كم",
             "المملكة العربية السعودية",
             item.get("dealer") or item.get("seller") or "Motory",
             "dealer", 0,
             item.get("image") or item.get("thumbnail") or _default_img(f"{brand} {model}"),
-            f"https://motory.com/sa/cars/{item.get('slug','')}",
+            f"https://ksa.Motory.com.com/sa/cars/{item.get('slug','')}",
             "", "high", "Motory — NEXT_DATA"))
     return out
 
@@ -1668,11 +1667,11 @@ def _motory_from_html(html, brand, model, year):
             if not price or price in seen: continue
             if not _price_in_range(price, brand, model): continue
             seen.add(price)
-            out.append(_L("motory","Motory.com",
+            out.append(_L("ksa.Motory.com","Motory.com",
                 f"{brand} {model}".strip(),"جديدة",price,"0 كم",
                 "المملكة العربية السعودية","Motory","dealer",0,
                 _default_img(f"{brand} {model}"),
-                f"https://ksa.motory.com/en/new-cars/{brand.lower()}/{model.lower()}/{year}",
+                f"https://ksa.ksa.Motory.com.com/en/new-cars/{brand.lower()}/{model.lower()}/{year}",
                 "","medium","Motory — HTML"))
     return out
 
@@ -1691,11 +1690,11 @@ async def playwright_yallamotorhttp(query: str, max_results: int = 10,
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
         "Accept": "application/json, text/html, */*",
-        "Referer": "https://www.yallamotor.com",
+        "Referer": "https://www.ksa.yallamotor.com.com",
         "Accept-Language": "ar,en;q=0.9",
     }
     urls = [
-        f"https://ksa.yallamotor.com/ar/new-cars?query={query.replace(' ','+')}",
+        f"https://ksa.ksa.yallamotor.com.com/ar/new-cars?query={query.replace(' ','+')}",
     ]
     results = []
     async with httpx.AsyncClient(timeout=20, headers=headers, follow_redirects=True) as client:
@@ -1703,7 +1702,7 @@ async def playwright_yallamotorhttp(query: str, max_results: int = 10,
             try:
                 r = await client.get(url)
                 ct = r.headers.get("content-type","")
-                print(f"  [YallaMotor] {url.split('yallamotor.com')[1][:50]} → {r.status_code}")
+                #print(f"  [YallaMotor] {url.split('ksa.yallamotor.com.com')[1][:50]} → {r.status_code}")
                 if r.status_code != 200: continue
 
                 if "json" in ct:
@@ -1718,12 +1717,12 @@ async def playwright_yallamotorhttp(query: str, max_results: int = 10,
                                 price = _clean_price(str(raw))
                                 if price: break
                         if not price or not _price_in_range(price, brand, model): continue
-                        results.append(_L("yallamotor","YallaMotor",
+                        results.append(_L("ksa.yallamotor.com","YallaMotor",
                             _clean_text(item.get("name") or item.get("title") or f"{brand} {model}"),
                             "جديدة",price,"0 كم","المملكة العربية السعودية",
                             item.get("dealer") or "YallaMotor","dealer",0,
                             item.get("image") or _default_img(f"{brand} {model}"),
-                            f"https://www.yallamotor.com{item.get('url','') or '/new-cars/'+b+'/'+mo}",
+                            f"https://www.ksa.yallamotor.com.com{item.get('url','') or '/new-cars/'+b+'/'+mo}",
                             "","high","YallaMotor — API"))
                     if results: break
                 else:
@@ -1740,7 +1739,7 @@ async def playwright_yallamotorhttp(query: str, max_results: int = 10,
                                     if raw:
                                         price = _clean_price(str(raw))
                                         if price and _price_in_range(price, brand, model):
-                                            results.append(_L("yallamotor","YallaMotor",
+                                            results.append(_L("ksa.yallamotor.com","YallaMotor",
                                                 _clean_text(item.get("name") or f"{brand} {model}"),
                                                 "جديدة",price,"0 كم",
                                                 "المملكة العربية السعودية",
@@ -1767,7 +1766,7 @@ async def playwright_yallamotor(query: str, max_results: int = 15,
 
     urls_to_try = [
         # URL الأساسي الصحيح — صفحة الموديل مع فلتر السنة
-         f"https://ksa.yallamotor.com/en/new-cars/{brand_slug}/{model_slug}/{year_val}",
+         f"https://ksa.ksa.yallamotor.com.com/en/new-cars/{brand_slug}/{model_slug}/{year_val}",
     ]
 
     async def _do_yallamotor():
@@ -1790,10 +1789,10 @@ async def playwright_yallamotor(query: str, max_results: int = 15,
             found = []
             for url in urls_to_try:
                 try:
-                    print(f"  [Syarah] {url}")
-                    await page.goto(url, wait_until="domcontentloaded", timeout=90000)
+                    #print(f"  [Syarah] {url}")
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
                     # try:
-                    #     await page.wait_for_load_state("networkidle", timeout=90000)
+                    #     await page.wait_for_load_state("networkidle", timeout=30000)
                     # except:
                     #     await asyncio.sleep(3)
 
@@ -1801,7 +1800,7 @@ async def playwright_yallamotor(query: str, max_results: int = 15,
                     try:
                         await page.wait_for_selector(
                             "[class*='posts-card'][class*='posts-card-body'][class*='car-card'],[class*='CarCard'],[class*='listing-card'],article,[data-car-id]",
-                            timeout=90000)
+                            timeout=30000)
                     except:
                         await asyncio.sleep(3)
                   
@@ -1809,25 +1808,25 @@ async def playwright_yallamotor(query: str, max_results: int = 15,
 
                     # ✅ page.content() يحتفظ بـ __NEXT_DATA__ scripts
                     html = await page.content()
-                    print(f"  [YallaMotor] HTML size: {len(html)} chars")
+                    #print(f"  [YallaMotor] HTML size: {len(html)} chars")
                     found = _yallamotor_from_next_data(html, brand, model, year)
-                    print(f" _yallamotor_from_next_data: {len(found)} results")
+                    #print(f" _yallamotor_from_next_data: {len(found)} results")
                     if found: break
                     for _, body in api_data:
                         found.extend(_yallamotor_from_api(body, brand, model))
 
-                    print(f" _syarah_from_api: {len(found)} results")    
+                    #print(f" _syarah_from_api: {len(found)} results")    
                     if found: break
                     found = _yallamotor_from_html(html, brand, model, year)
-                    print(f" _yallamotor_from_html: {len(found)} results") 
+                    #print(f" _yallamotor_from_html: {len(found)} results") 
                     if found: break
                 except Exception as e:
                     print(f"  [YallaMotor] url :{url} error: {e}")
             await browser.close()
             return found
 
-    results = await _with_retry(_do_yallamotor, "yallamotor")
-    print(f"  [yallamotor]_do_yallamotor results: {results}")
+    results = await _with_retry(_do_yallamotor, "ksa.yallamotor.com")
+    #print(f"  [ksa.yallamotor.com]_do_yallamotor results: {results}")
     return [r for r in results if _price_in_range(r["price"], brand, model)][:max_results]
 
 
@@ -1866,9 +1865,9 @@ def _yallamotor_from_next_data(html, brand, model, year):
                 price = _clean_price(str(raw))
                 if price: break
         if not price: continue
-        vat = _normalize_price_vat(price, "syarah")
+        vat = _normalize_price_vat(price, "syarah.com")
         is_new = car.get("is_new") or car.get("type")=="new" or not car.get("mileage")
-        out.append(_L("syarah","Syarah.com",
+        out.append(_L("syarah.com","Syarah.com",
             _clean_text(car.get("title") or car.get("name") or f"{brand} {model}"),
             "جديدة" if is_new else "مستعملة", price,
             f"{car.get('mileage',0):,} كم" if car.get("mileage") else "0 كم",
@@ -1877,7 +1876,7 @@ def _yallamotor_from_next_data(html, brand, model, year):
             "dealer" if car.get("is_dealer") else "individual",
             _parse_days(car.get("created_at") or ""),
             car.get("main_image") or car.get("image") or _default_img(f"{brand} {model}"),
-            f"https://ksa.yallamotor.com/ar/new-cars?query={car.get('id','')}",
+            f"https://ksa.ksa.yallamotor.com.com/ar/new-cars?query={car.get('id','')}",
             "", "high", "YallaMotor — NEXT_DATA JSON"))
     return out
 
@@ -1894,13 +1893,13 @@ def _yallamotor_from_api(data, brand, model):
                 price = _clean_price(str(car[pk]))
                 if price: break
         if not price: continue
-        out.append(_L("syarah","Syarah.com",
+        out.append(_L("syarah.com","Syarah.com",
             _clean_text(car.get("title") or car.get("name") or f"{brand} {model}"),
             "جديدة" if not car.get("mileage") else "مستعملة", price,
             "0 كم", car.get("city") or "غير محدد",
             car.get("seller_name") or "Syarah", "dealer", 0,
             _default_img(f"{brand} {model}"),
-            f"https://ksa.yallamotor.com/ar/new-cars?query={car.get('id','')}",
+            f"https://ksa.ksa.yallamotor.com.com/ar/new-cars?query={car.get('id','')}",
             "", "high", "YallaMotor — API"))
     return out
 
@@ -1913,33 +1912,33 @@ def _yallamotor_from_html(html, brand, model, year):
 
     # كل الكروت
     cards = soup.select('div.flex.flex-col.gap-4')
-    print(f"  [YallaMotor] Found {len(cards)} potential car cards in HTML")
+    #print(f"  [YallaMotor] Found {len(cards)} potential car cards in HTML")
     for card in cards:
         try:
             # =========================
             # 1️⃣ العنوان
             # =========================
             title_tag = card.select_one('h3')
-            print(f"  [YallaMotor] title_tag: {title_tag} ")
+            #print(f"  [YallaMotor] title_tag: {title_tag} ")
             if not title_tag:
                 continue
 
             title = title_tag.get_text(strip=True)
             title_l = title.lower()
-            print(f"  [YallaMotor] title_l: {title_l} ")
+            #print(f"  [YallaMotor] title_l: {title_l} ")
             # =========================
             # 2️⃣ السعر
             # =========================
             price = None
 
             price_divs = card.find_all(string=re.compile(r"SAR"))
-            print(f"  [YallaMotor] price_divs: {price_divs} ")
+            #print(f"  [YallaMotor] price_divs: {price_divs} ")
             for p in price_divs:
-                print(f"  [YallaMotor] price candidate: {p} ")
+                #print(f"  [YallaMotor] price candidate: {p} ")
                 raw = str(p)
-                print(f"  [YallaMotor] raw price text: {raw} ")
+                #print(f"  [YallaMotor] raw price text: {raw} ")
                 match = re.search(r'([\d٠-٩,٬]{5,10})', raw)
-                print(f"  [YallaMotor] price match: {match} ")
+                #print(f"  [YallaMotor] price match: {match} ")
                 if match:
                     price = _clean_price(match.group(1))
                     break
@@ -1981,7 +1980,7 @@ def _yallamotor_from_html(html, brand, model, year):
             # 5️⃣ إضافة النتيجة
             # =========================
             out.append(_L(
-                "yallamotor",
+                "ksa.yallamotor.com",
                 "YallaMotor.com",
                 title,
                 condition,
@@ -1992,7 +1991,7 @@ def _yallamotor_from_html(html, brand, model, year):
                 "dealer",
                 0,
                 _default_img(title),
-                f"https://ksa.yallamotor.com/en/new-cars/{brand}/{model}/{year}" if url else "",
+                f"https://ksa.ksa.yallamotor.com.com/en/new-cars/{brand}/{model}/{year}" if url else "",
                 "",
                 "low",
                 "YallaMotor — SMART"
@@ -2006,7 +2005,7 @@ def _yallamotor_from_html(html, brand, model, year):
 
 async def run_test(query: str = "2026 Toyota Yaris"):
     brand, model, year = "Toyota", "Yaris", 2026
-    print(f"\n{'='*55}\nاختبار: {query}\n{'='*55}")
+    #print(f"\n{'='*55}\nاختبار: {query}\n{'='*55}")
     for name, coro in [
         ("Syarah",     playwright_syarah(query, brand=brand, model=model, year=year)),
         ("Haraj",      playwright_haraj(query, brand=brand, model=model, year=year)),
@@ -2014,7 +2013,7 @@ async def run_test(query: str = "2026 Toyota Yaris"):
         ("Motory",     playwright_motory(query, brand=brand, model=model, year=year)),
     ]:
         results = await coro
-        print(f"\n[{name}] {len(results)} نتيجة")
+        #print(f"\n[{name}] {len(results)} نتيجة")
         for r in results[:3]:
             print(f"   {r['listedAs'][:40]} → {r['price']:,} | {r['matchReason']}")
 

@@ -11,6 +11,11 @@ from typing import Optional
 import httpx
 from fastapi import FastAPI, HTTPException
 from trims_config import get_trims, get_all_configured, normalize_from_config, TrimDefinition
+from trim_classifier import (
+    classify_listing, classify_and_structure,
+    bucket_listings_by_trim, build_trims_response,
+    deduplicate_listings, reject_outliers,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -20,10 +25,10 @@ try:
         playwright_syarah, playwright_haraj,
         playwright_toyota_sa, playwright_lexus_sa, playwright_motory, playwright_yallamotor, PLAYWRIGHT_OK
     )
-    print(f"✅ Playwright scrapers loaded: {PLAYWRIGHT_OK}")
+    #print(f"✅ Playwright scrapers loaded: {PLAYWRIGHT_OK}")
 except ImportError as e:
     PLAYWRIGHT_OK = False
-    print(f"⚠️  scraper_playwright not found: {e}")
+    #print(f"⚠️  scraper_playwright not found: {e}")
     async def playwright_syarah(q, **kw): return []
     async def playwright_haraj(q, **kw): return []
     async def playwright_toyota_sa(m, **kw): return []
@@ -49,12 +54,12 @@ _mem_cache: dict  = {}
 
 # ── Default Sources ─────────────────────────────────────────────
 DEFAULT_SOURCES = {
-    "toyota_sa":  {"id":"toyota_sa",  "name":"Toyota.com.sa",  "name_ar":"تويوتا السعودية", "url":"https://www.toyota.com.sa",  "color":"#00C49A","enabled":True, "type":"playwright","priority":1,"search_url":"https://www.toyota.com.sa/en/models/{model}", "category":"official"},
-    "lexus_sa":   {"id":"lexus_sa",   "name":"Lexus.com.sa",   "name_ar":"لكسัส",            "url":"https://www.lexus.com.sa",    "color":"#00C49A","enabled":True, "type":"playwright","priority":2,"search_url":"https://www.lexus.com.sa/en/models/{model}", "category":"official"},
-    "motory":     {"id":"motory",     "name":"ksa.Motory.com",  "name_ar":"موتوري",          "url":"https://ksa.motory.com",          "color":"#f5a623","enabled":True, "type":"playwright","priority":3,"search_url":"https://motory.com/sa/new-cars/search?q={query}", "category":"new_cars"},
-    "haraj":      {"id":"haraj",      "name":"Haraj.com.sa",   "name_ar":"حراج",            "url":"https://haraj.com.sa",        "color":"#ff8055","enabled":True, "type":"playwright","priority":4,"search_url":"https://haraj.com.sa/search/{query}",            "category":"marketplace"},
-    "yallamotor": {"id":"yallamotor", "name":"YallaMotor",     "name_ar":"يلا موتور",       "url":"https://www.yallamotor.com",  "color":"#a78bfa","enabled":True, "type":"playwright",    "priority":5,"search_url":"https://ksa.yallamotor.com/ar/new-cars?query={query}&country=sa", "category":"new_cars"},
-    "syarah":     {"id":"syarah",     "name":"Syarah.com",     "name_ar":"سيارة",           "url":"https://syarah.com",          "color":"#4da6ff","enabled":True, "type":"playwright","priority":6,"search_url":"https://syarah.com/filters?text={query}",        "category":"marketplace"},
+    "toyota.com.sa":  {"id":"toyota.com.sa",  "name":"Toyota.com.sa",  "name_ar":"تويوتا السعودية", "url":"https://www.toyota.com.sa",  "color":"#00C49A","enabled":True, "type":"playwright","priority":1,"search_url":"https://www.toyota.com.sa/en/models/{model}", "category":"official"},
+    "lexus.com.sa":   {"id":"lexus.com.sa",   "name":"Lexus.com.sa",   "name_ar":"لكسัส",            "url":"https://www.lexus.com.sa",    "color":"#00C49A","enabled":True, "type":"playwright","priority":2,"search_url":"https://www.lexus.com.sa/en/models/{model}", "category":"official"},
+    "ksa.Motory.com":     {"id":"ksa.Motory.com",     "name":"ksa.Motory.com",  "name_ar":"موتوري",          "url":"https://ksa.ksa.Motory.com.com",          "color":"#f5a623","enabled":True, "type":"playwright","priority":3,"search_url":"https://ksa.Motory.com.com/sa/new-cars/search?q={query}", "category":"new_cars"},
+    "haraj.com.sa":      {"id":"haraj.com.sa",      "name":"Haraj.com.sa",   "name_ar":"حراج",            "url":"https://haraj.com.sa.com.sa",        "color":"#ff8055","enabled":True, "type":"playwright","priority":4,"search_url":"https://haraj.com.sa.com.sa/search/{query}",            "category":"marketplace"},
+    "ksa.yallamotor.com": {"id":"ksa.yallamotor.com", "name":"ksa.yallamotor.com",     "name_ar":"يلا موتور",       "url":"https://www.ksa.yallamotor.com.com",  "color":"#a78bfa","enabled":True, "type":"playwright",    "priority":5,"search_url":"https://ksa.ksa.yallamotor.com.com/ar/new-cars?query={query}&country=sa", "category":"new_cars"},
+    "syarah.com":     {"id":"syarah.com",     "name":"Syarah.com",     "name_ar":"سيارة",           "url":"https://syarah.com.com",          "color":"#4da6ff","enabled":True, "type":"playwright","priority":6,"search_url":"https://syarah.com.com/filters?text={query}",        "category":"marketplace"},
 }
 
 def _load_sources() -> dict:
@@ -635,6 +640,7 @@ class SearchRequest(BaseModel):
     anthropic_key: str
     source_ids: Optional[list[str]] = None
     new_only: bool = True   # افتراضي: جديدة فقط (يستثني المستعملة من Haraj)
+    claude_ai: bool = True  # افتراضي: عدم استخدام الذكاء الاصطناعي
 
 class SourceUpdate(BaseModel):
     name: Optional[str] = None
@@ -796,7 +802,7 @@ class TrimsRequest(BaseModel):
     force_refresh: bool = False
 
 @app.post("/trims")
-async def get_trims(req: TrimsRequest):
+async def get_trims_action(req: TrimsRequest):
     """Fetch official trims for any brand/model/year"""
     key = (req.brand.lower(), req.model.lower(), req.year)
     
@@ -953,19 +959,19 @@ async def httpx_yallamotor(query, client):
     year = parts[0] if parts and parts[0].isdigit() else ""
     brand = parts[1] if len(parts)>1 else ""
     model = " ".join(parts[2:]) if len(parts)>2 else ""
-    for url in [f"https://www.yallamotor.com/api/new-cars?brand={brand}&model={model}&year={year}&country=sa&limit=12",
-                f"https://www.yallamotor.com/api/v2/listings?q={_qenc(query)}&country=sa&limit=12"]:
+    for url in [f"https://www.ksa.yallamotor.com.com/api/new-cars?brand={brand}&model={model}&year={year}&country=sa&limit=12",
+                f"https://www.ksa.yallamotor.com.com/api/v2/listings?q={_qenc(query)}&country=sa&limit=12"]:
         try:
-            r = await client.get(url, headers={"Referer":"https://www.yallamotor.com/"}, timeout=SCRAPE_TIMEOUT)
+            r = await client.get(url, headers={"Referer":"https://www.ksa.yallamotor.com.com/"}, timeout=SCRAPE_TIMEOUT)
             if r.status_code==200 and "json" in r.headers.get("content-type",""):
                 cars = r.json().get("data") or r.json().get("cars") or r.json().get("results") or []
                 for c in cars[:10]:
                     p = _int(c.get("price") or c.get("base_price") or c.get("min_price"))
                     if p > 20000:
-                        out.append(_L("yallamotor","YallaMotor.com",c.get("name") or query,
+                        out.append(_L("ksa.yallamotor.com","YallaMotor.com",c.get("name") or query,
                             "جديدة",p,"0 كم",c.get("city") or "السعودية",
                             c.get("dealer_name") or "YallaMotor","dealer",0,
-                            c.get("image") or _img(query),c.get("url") or "https://www.yallamotor.com",
+                            c.get("image") or _img(query),c.get("url") or "https://www.ksa.yallamotor.com.com",
                             (c.get("specs") or "")[:80],"high","YallaMotor — جديد"))
                 if out: break
         except Exception as e: print(f"YallaMotor: {e}")
@@ -1288,7 +1294,7 @@ async def fetch_official_trims(brand: str, model: str, year: int,
     configured = get_trims(brand, model)
     if configured:
         return [
-            TrimInfo(name=t.name, name_ar=t.name_ar, msrp=t.msrp, engine=t.engine,
+            TrimInfo(name=t.name.lower(), name_ar=t.name_ar, msrp=t.msrp, engine=t.engine,
                      keywords=t.keywords, score=t.match_score)
             for t in configured
         ]
@@ -1388,10 +1394,10 @@ async def _scrape_trims_toyota_sa(brand: str, model: str, year: int) -> list[Tri
                                 ))
                     
                     if trims:
-                        print(f"  ✅ toyota.com.sa trims for {model}: {[t.name for t in trims]}")
+                        #print(f"  ✅ toyota.com.sa trims for {model}: {[t.name for t in trims]}")
                         break
                 except Exception as e:
-                    print(f"  Toyota SA trim scrape {url}: {e}")
+                    #print(f"  Toyota SA trim scrape {url}: {e}")
                     continue
             
             await browser.close()
@@ -1404,7 +1410,7 @@ async def _scrape_trims_toyota_sa(brand: str, model: str, year: int) -> list[Tri
 async def _ai_fetch_trims(brand: str, model: str, year: int,
                            anthropic_key: str) -> list[TrimInfo]:
     """Ask Claude for official trims of any brand/model in Saudi Arabia"""
-    print(f"  starting AI trim fetch for {year} {brand} {model}...")
+    #print(f"  starting AI trim fetch for {year} {brand} {model}...")
     if not anthropic_key:
         return []
    
@@ -1437,7 +1443,7 @@ RULES:
             )
         r.raise_for_status()
         raw = r.json()["content"][0]["text"]
-        print(f"response from AI: {raw[:200]}...")  # Log the raw response for debugging
+        #print(f"response from AI: {raw[:200]}...")  # Log the raw response for debugging
         data = json.loads(re.sub(r"```json|```","",raw).strip())
         trims = []
         for item in data:
@@ -1449,10 +1455,10 @@ RULES:
                 keywords=item.get("keywords",[]),
                 score=float(item.get("score",0.85))
             ))
-        print(f"  ✅ AI trims for {year} {brand} {model}: {[t.name for t in trims]}")
+        #print(f"  ✅ AI trims for {year} {brand} {model}: {[t.name for t in trims]}")
         return trims
     except Exception as e:
-        print(f"  AI trim fetch error: {e}")
+        #print(f"  AI trim fetch error: {e}")
         return []
 
 
@@ -1505,7 +1511,7 @@ async def get_model_trims_from_catalog(brand: str, model: str, year: int) -> lis
     groups      = cached.get("groups", [])
     brands_list = cached.get("brands", [])
 
-    print(f"get_model_trims_from_catalog : {brands_list}  ")
+    #print(f"get_model_trims_from_catalog : {brands_list}  ")
 
     # 1. نجد BrandID من اسم الماركة
     brand_id = None
@@ -1515,7 +1521,7 @@ async def get_model_trims_from_catalog(brand: str, model: str, year: int) -> lis
             brand_id = b.get("BrandID")
             break
 
-    print(f"get_model_trims_from_catalog brand_id : {brand_id}  ")
+    #print(f"get_model_trims_from_catalog brand_id : {brand_id}  ")
 
     if not brand_id:
         return []
@@ -1531,7 +1537,7 @@ async def get_model_trims_from_catalog(brand: str, model: str, year: int) -> lis
             group_id = g.get("productGroupID")
             break
 
-    print(f"get_model_trims_from_catalog group_id : {group_id}  ")
+    #print(f"get_model_trims_from_catalog group_id : {group_id}  ")
     # إذا ما لقينا بالسنة، نحاول بدونها
     if not group_id:
         for g in groups:
@@ -1542,7 +1548,7 @@ async def get_model_trims_from_catalog(brand: str, model: str, year: int) -> lis
                 group_id = g.get("productGroupID")
                 break
 
-    print(f"get_model_trims_from_catalog 22 group_id : {group_id}  ")
+    #print(f"get_model_trims_from_catalog 22 group_id : {group_id}  ")
     if not group_id:
         return []
 
@@ -1573,7 +1579,7 @@ async def get_model_trims_from_catalog(brand: str, model: str, year: int) -> lis
 
 # ── AI fallback ─────────────────────────────────────────────────
 async def ai_fallback(brand, model, year, source_ids, key):
-    print(f"starting AI fallback for {year} {brand} {model} with sources {source_ids}...")
+    #print(f"starting AI fallback for {year} {brand} {model} with sources {source_ids}...")
     names = [sources_store[s]["name"] for s in source_ids if s in sources_store]
 
       # ── جلب أسماء الفئات من الكاتالوج ──
@@ -1597,11 +1603,11 @@ KSA PRICING RULES: All SAR+15%VAT. Dealer=MSRP±3%, Private(Haraj)=MSRP-4~9%, Sy
 RULES: {trims_hint} | 4+ listings/source/trim | vary location+seller | priceType:exact|interpolated|estimated per listing | NO imageUrl/sellerName/URLs→use "" | priceNote Arabic reasoning | isAIFallback:false if any T1/T2 used
 
 Return ONLY valid JSON no markdown:
-{{"vehicle":"{year} {brand} {model}","brand":"{brand}","model":"{model}","year":{year},"searchDate":"{datetime.now().strftime('%B %Y')}","isAIFallback":true,"officialPriceRange":{{"min":0,"max":0}},"marketInsight":"Arabic","trims":[{{"officialName":"","officialNameAr":"","officialMSRP":0,"engine":"","commonAliases":["a1"],"listings":[{{"source":"syarah","sourceName":"Syarah.com","listedAs":"Arabic","priceType":"exact|interpolated|estimated","matchConfidence":"high|medium|low","condition":"جديدة","price":0,"mileage":"0 كم","location":"city","priceNote":"Arabic","sellerType":"dealer","sellerName":"","postedDaysAgo":3,"imageUrl":""}}],"priceAnalysis":{{"marketMin":0,"marketMax":0,"marketAvg":0,"vsOfficialPct":0,"trend":"stable"}}}}],"competitorAnalysis":{{"summary":"Arabic","opportunities":["Arabic"],"threats":["Arabic"],"recommendation":"Arabic"}}}}"""
+{{"vehicle":"{year} {brand} {model}","brand":"{brand}","model":"{model}","year":{year},"searchDate":"{datetime.now().strftime('%B %Y')}","isAIFallback":true,"officialPriceRange":{{"min":0,"max":0}},"marketInsight":"Arabic","trims":[{{"officialName":"","officialNameAr":"","officialMSRP":0,"engine":"","commonAliases":["a1"],"listings":[{{"source":"syarah.com","sourceName":"Syarah.com","listedAs":"Arabic","priceType":"exact|interpolated|estimated","matchConfidence":"high|medium|low","condition":"جديدة","price":0,"mileage":"0 كم","location":"city","priceNote":"Arabic","sellerType":"dealer","sellerName":"","postedDaysAgo":3,"imageUrl":""}}],"priceAnalysis":{{"marketMin":0,"marketMax":0,"marketAvg":0,"vsOfficialPct":0,"trend":"stable"}}}}],"competitorAnalysis":{{"summary":"Arabic","opportunities":["Arabic"],"threats":["Arabic"],"recommendation":"Arabic"}}}}"""
     await cache_set('ai_fallback_prompt', {"content":prompt})  # Cache the prompt for debugging
 
     
-    print(f"AI prompt: {prompt}")  # Log the prompt for debugging
+    #print(f"AI prompt: {prompt}")  # Log the prompt for debugging
     try:
         async with httpx.AsyncClient(
                     timeout=180.0,
@@ -1629,26 +1635,26 @@ Return ONLY valid JSON no markdown:
         r.raise_for_status()
 
     except Exception as e:
-        print("HTTP request failed:", str(e))
+        #print("HTTP request failed:", str(e))
         raise
 
     # ── معالجة الرد ─────────────────────────────────────────────
     try:
         data = r.json()
-        print(data.get("stop_reason"))
+        #print(data.get("stop_reason"))
     except Exception as e:
-        print("Failed to parse response as JSON:", str(e))
-        print("Raw response text:", r.text)
+        #print("Failed to parse response as JSON:", str(e))
+        #print("Raw response text:", r.text)
         raise
 
     # ── استخراج النص بشكل آمن ──────────────────────────────────
     text = ""
     if "content" in data and len(data["content"]) > 0:
         text = data["content"][0].get("text", "")
-        print(f"response from AI fallback: {text}...")
+        #print(f"response from AI fallback: {text}...")
     else:
-        print("Unexpected response structure:")
-        print(data)
+        #print("Unexpected response structure:")
+        #print(data)
         raise ValueError("Invalid AI response format")
 
     # ── تنظيف النص ─────────────────────────────────────────────
@@ -1659,9 +1665,9 @@ Return ONLY valid JSON no markdown:
         return json.loads(clean_text)
 
     except Exception as e:
-        print("Failed to parse JSON:", str(e))
-        print("Cleaned response was:")
-        print(clean_text)
+        #print("Failed to parse JSON:", str(e))
+        #print("Cleaned response was:")
+        #print(clean_text)
         raise
 
 # ── Main search by playwright   ─────────────────────────────────────────────────
@@ -1676,7 +1682,7 @@ async def searchByURL(req: SearchRequest):
          (req.source_ids is None or s["id"] in req.source_ids)],
         key=lambda s: s.get("priority", 99)
     )
-    print(f"active sources for {req.year} {req.brand} {req.model}: {[s['id'] for s in active]}")
+    #print(f"active sources for {req.year} {req.brand} {req.model}: {[s['id'] for s in active]}")
     query  = f"{req.year} {req.brand} {req.model}"
     raw: list[dict] = []
     statuses: dict  = {}
@@ -1691,7 +1697,7 @@ async def searchByURL(req: SearchRequest):
         sid  = src["id"]
         stype = src.get("type","httpx")
 
-        if stype == "playwright" or sid in ("syarah","haraj","motory","toyota_sa","yallamotor"):
+        if stype == "playwright" or sid in ("syarah.com","haraj.com.sa","ksa.Motory.com","toyota.com.sa","ksa.yallamotor.com"):
             playwright_tasks.append(sid)
         else:
             httpx_tasks.append(sid)
@@ -1704,47 +1710,47 @@ async def searchByURL(req: SearchRequest):
             # ── تمرير brand/model/year لتفعيل _price_in_range الصحيح ──
             kw = {"brand": req.brand, "model": req.model, "year": req.year}
             used_keywords = ["مستعمل", "مستعملة", "used", "pre-owned"]
-            if sid == "syarah":
+            if sid == "syarah.com":
                 results = await playwright_syarah(query, max_results=20, **kw)
-                # print(f"  [Syarah]after playwright_syarah results: {len(results)}")
+                # #print(f"  [Syarah]after playwright_syarah results: {len(results)}")
                 # فلتر المستعملة — نريد الجديدة فقط لمقارنة الوكلاء
                 results = [
                         r for r in results
                         if not any(k in str(r.get("condition", "")).lower() for k in used_keywords)
                     ]
                 return sid, results
-            elif sid == "haraj":
+            elif sid == "haraj.com.sa":
                 # حراج يجلب مستعملة — نحتفظ بها كمعلومة لكن نعلّمها
                 results = await playwright_haraj(query, max_results=20, **kw)
-                # print(f"  [Haraj]after playwright_haraj results: {results}")
+                # #print(f"  [Haraj]after playwright_haraj results: {results}")
                     # إذا new_only: احذف المستعملة تماماً
                 # results = [
                 #         r for r in results
                 #         if not any(k in str(r.get("condition", "")).lower() for k in used_keywords)
                 #     ]
                 return sid, results
-            elif sid == "motory":
+            elif sid == "ksa.Motory.com":
                 results = await playwright_motory(query, max_results=20, **kw)
                 results = [r for r in results if "جديد" in str(r.get("condition","")).lower()
                            or r.get("condition","") in ("New","جديدة")]
                 return sid, results
-            elif sid == "yallamotor":
+            elif sid == "ksa.yallamotor.com":
                 results = await playwright_yallamotor(query, max_results=20, **kw)
-                # print(f"  [YallaMotor]after playwright_yallamotor results: {len(results)}")
+                # #print(f"  [YallaMotor]after playwright_yallamotor results: {len(results)}")
                  # فلتر المستعملة — نريد الجديدة فقط لمقارنة الوكلاء
                 results = [
                         r for r in results
                         if not any(k in str(r.get("condition", "")).lower() for k in used_keywords)
                                        ]
-                # print(f"  [YallaMotor]after filtering used: {len(results)}")
+                # #print(f"  [YallaMotor]after filtering used: {len(results)}")
                 return sid, results
-            if sid == "toyota_sa" and req.brand.lower() == "toyota":
+            if sid == "toyota.com.sa" and req.brand.lower() == "toyota":
                 model_name = " ".join(query.split()[2:]) if len(query.split()) > 2 else req.model
                 return sid, await playwright_toyota_sa(model_name, year=req.year)
-            elif sid == "lexus_sa" and req.brand.lower() == "lexus":
+            elif sid == "lexus.com.sa" and req.brand.lower() == "lexus":
                 model_name = " ".join(query.split()[2:]) if len(query.split()) > 2 else req.model
                 results= await playwright_lexus_sa(model_name, year=req.year)
-                # print(f"  [Lexus SA]after playwright_lexus_sa results: {results}")
+                # #print(f"  [Lexus SA]after playwright_lexus_sa results: {results}")
                 return sid,results 
           
             return sid, []
@@ -1759,7 +1765,7 @@ async def searchByURL(req: SearchRequest):
         )
         for item in pw_results:
             if isinstance(item, Exception):
-                print(f"Playwright gather error: {item}")
+                #print(f"Playwright gather error: {item}")
                 continue
             sid, result = item
             if isinstance(result, Exception):
@@ -1773,7 +1779,7 @@ async def searchByURL(req: SearchRequest):
                     print(f"  ⚠️  {sid}: 0 results via Playwright")
 
     # ── Run httpx scrapers ──
-    print(f"Starting httpx tasks for sources: {httpx_tasks}")
+    #print(f"Starting httpx tasks for sources: {httpx_tasks}")
     if httpx_tasks:
         hclient = httpx.AsyncClient(
             headers={"User-Agent":"Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36"},
@@ -1783,7 +1789,7 @@ async def searchByURL(req: SearchRequest):
             htasks = []
             for sid in httpx_tasks:
                 src = sources_store.get(sid, {})
-                if   sid == "yallamotor":  htasks.append((sid, httpx_yallamotor(query, client)))
+                if   sid == "ksa.yallamotor.com":  htasks.append((sid, httpx_yallamotor(query, client)))
                 else:                      htasks.append((sid, httpx_generic(src, query, client)))
 
             hresults = await asyncio.gather(*[t[1] for t in htasks], return_exceptions=True)
@@ -1797,34 +1803,41 @@ async def searchByURL(req: SearchRequest):
     use_ai =False
     data = None
 
-    print(f"  Total listings collected: {len(raw)} (AI fallback used: {use_ai})")
-    print(f"real data only, no AI fallback — total {len(raw)} listings")
-    prices = [l["price"] for l in raw if l.get("price")]
-    avg = int(sum(prices)/len(prices)) if prices else 0
+    #print(f"  Total listings collected: {len(raw)} (AI fallback used: {use_ai})")
+    #print(f"real data only, no AI fallback — total {len(raw)} listings")
+
+    # ── Classify listings into trims (same engine as searchURLAndAI) ──
+    classified = classify_and_structure(
+        raw_listings=raw,
+        brand=req.brand,
+        model=req.model,
+        year=req.year,
+        dynamic_trims=None,  # searchByURL لا يستخدم AI لجلب الفئات
+        ai_data=None,
+    )
+
     data = {
-            "vehicle": f"{req.year} {req.brand} {req.model}",
-            "brand": req.brand, "model": req.model, "year": req.year,
-            "searchDate": datetime.now().strftime("%B %Y"), "isAIFallback": False,
-            "officialPriceRange": {"min": min(prices, default=0), "max": max(prices, default=0)},
-            "marketInsight": f"تم جمع {len(raw)} إعلان من المصادر الحية عبر Playwright",
-            "priceHistory": [],
-            "competitorAnalysis": {"summary":"","opportunities":[],"threats":[],"recommendation":""},
-            "trims": [{
-                "officialName": f"{req.model} ",
-                "officialNameAr": f" {req.model}",
-                "officialMSRP": avg, "engine": "", "commonAliases": [],
-                "listings": raw,
-                "priceAnalysis": {
-                    "marketMin": min(prices, default=0),
-                    "marketMax": max(prices, default=0),
-                    "marketAvg": avg, "vsOfficialPct": 0, "trend": "stable"
-                }
-            }],
+        "vehicle": classified["vehicle"],
+        "brand": classified["brand"],
+        "model": classified["model"],
+        "year": classified["year"],
+        "searchDate": datetime.now().strftime("%B %Y"),
+        "isAIFallback": False,
+        "officialPriceRange": classified["officialPriceRange"],
+        "marketInsight": f"تم جمع {len(raw)} إعلان من المصادر الحية — مصنّفة إلى {len(classified['trims'])} فئات",
+        "priceHistory": [],
+        "competitorAnalysis": {"summary":"","opportunities":[],"threats":[],"recommendation":""},
+        "trims": classified["trims"],
     }
+
+    # Log classification summary
+    for t in data["trims"]:
+        n = len(t.get("listings", []))
+        #print(f"  📊 {t['officialName']}: {n} listings")
 
     # ── حساب إحصائيات كل مصدر لكل فئة ──
     _attach_source_stats(data)
-    print(f"  Source stats attached for {len(data.get('trims', []))} trims")
+    #print(f"  Source stats attached for {len(data.get('trims', []))} trims")
     data.update({
         "sourceStatuses": statuses,
         "scrapedCount": len(raw),
@@ -1845,21 +1858,21 @@ async def searchByURL(req: SearchRequest):
 # ── Main search by Ai ─────────────────────────────────────────────────
 @app.post("/searchByAI")
 async def searchByAI(req: SearchRequest):
-    cache_key = f"{req.brand}:{req.model}:{req.year}:{','.join(sorted(req.source_ids or []))}"
+    cache_key = f"searchByAI_{req.brand}:{req.model}:{req.year}:{','.join(sorted(req.source_ids or []))}"
     cached = await cache_get(cache_key)
     if cached: return cached
 
 # ✅ تعطيل مصدر معين حسب البراند
     if req.brand and req.brand.lower() != "lexus":
-        if "lexus_sa" in sources_store:
-            sources_store["lexus_sa"]["enabled"] = False
+        if "lexus.com.sa" in sources_store:
+            sources_store["lexus.com.sa"]["enabled"] = False
 
     active = sorted(
         [s for s in sources_store.values() if s["enabled"] and
          (req.source_ids is None or s["id"] in req.source_ids)],
         key=lambda s: s.get("priority", 99)
     )
-    print(f"active sources for {req.year} {req.brand} {req.model}: {[s['id'] for s in active]}")
+    #print(f"active sources for {req.year} {req.brand} {req.model}: {[s['id'] for s in active]}")
     raw: list[dict] = []
     statuses: dict  = {}
 
@@ -1869,60 +1882,47 @@ async def searchByAI(req: SearchRequest):
     ai_data = None
     ai_failed = False
     if use_ai:
-        print(f"  ⚠️  Only {len(raw)} real listings — using AI fallback")
+        #print(f"  ⚠️  Only {len(raw)} real listings — using AI fallback")
         try:
             ai_data = await ai_fallback(
                 req.brand, req.model, req.year,
                 [s["id"] for s in active], req.anthropic_key
             )
         except Exception as e:
-            print(f"AI fallback error: {e}")
+            #print(f"AI fallback error: {e}")
             ai_failed = True
 
-    print(f"  Total listings collected: {len(raw)} (AI fallback used: {use_ai})")
-    # ── Merge real data with AI structure ──
-    if ai_data and raw:
-        # Get dynamic trims for accurate matching
-        dyn_trims = await fetch_official_trims(req.brand, req.model, req.year, req.anthropic_key)
-        print(f"  Fetched {len(dyn_trims)} dynamic trims for matching")
-        for l in raw:
-            name, reason, conf = normalize_trim_dynamic(l.get("listedAs",""), req.brand, req.model, dyn_trims)
-            l.update({
-                "matchReason": reason,
-                "matchConfidence": "high" if conf>0.85 else "medium" if conf>0.65 else "low"
-            })
-            t = next((t for t in ai_data.get("trims",[]) if t["officialName"]==name), None)
-            if t: t["listings"].append(l)
-            elif ai_data.get("trims"): ai_data["trims"][0]["listings"].append(l)
+    #print(f"  Total listings collected: {len(raw)} (AI fallback used: {use_ai})")
+    # ── Classify listings into trims ──
+    dyn_trims = await fetch_official_trims(req.brand, req.model, req.year, req.anthropic_key)
+    classified = classify_and_structure(
+        raw_listings=raw,
+        brand=req.brand,
+        model=req.model,
+        year=req.year,
+        dynamic_trims=dyn_trims,
+        ai_data=ai_data,
+    )
 
-    elif not ai_data:
-        print(f"real data only, no AI fallback — total {len(raw)} listings")
-        prices = [l["price"] for l in raw if l.get("price")]
-        avg = int(sum(prices)/len(prices)) if prices else 0
-        ai_data = {
-            "vehicle": f"{req.year} {req.brand} {req.model}",
-            "brand": req.brand, "model": req.model, "year": req.year,
-            "searchDate": datetime.now().strftime("%B %Y"), "isAIFallback": False,
-            "officialPriceRange": {"min": min(prices, default=0), "max": max(prices, default=0)},
-            "marketInsight": f"تم جمع {len(raw)} إعلان من المصادر الحية عبر Playwright",
-            "priceHistory": [],
-            "competitorAnalysis": {"summary":"","opportunities":[],"threats":[],"recommendation":""},
-            "trims": [{
-                "officialName": f"{req.model} ",
-                "officialNameAr": f" {req.model}",
-                "officialMSRP": avg, "engine": "", "commonAliases": [],
-                "listings": raw,
-                "priceAnalysis": {
-                    "marketMin": min(prices, default=0),
-                    "marketMax": max(prices, default=0),
-                    "marketAvg": avg, "vsOfficialPct": 0, "trend": "stable"
-                }
-            }],
-        }
+    ai_data = {
+        "vehicle": classified["vehicle"],
+        "brand": classified["brand"],
+        "model": classified["model"],
+        "year": classified["year"],
+        "searchDate": datetime.now().strftime("%B %Y"),
+        "isAIFallback": use_ai,
+        "officialPriceRange": classified["officialPriceRange"],
+        "marketInsight": classified.get("marketInsight",
+            f"تم جمع {len(raw)} إعلان — مصنّفة إلى {len(classified['trims'])} فئات"),
+        "priceHistory": classified.get("priceHistory", []),
+        "competitorAnalysis": classified.get("competitorAnalysis",
+            {"summary":"","opportunities":[],"threats":[],"recommendation":""}),
+        "trims": classified["trims"],
+    }
 
     # ── حساب إحصائيات كل مصدر لكل فئة ──
-    # _attach_source_stats(ai_data)
-    print(f"  Source stats attached for {len(ai_data.get('trims', []))} trims")
+    _attach_source_stats(ai_data)
+    #print(f"  Source stats attached for {len(ai_data.get('trims', []))} trims")
     ai_data.update({
         "sourceStatuses": statuses,
         "scrapedCount": len(raw),
@@ -1940,6 +1940,215 @@ async def searchByAI(req: SearchRequest):
     #    await cache_set(cache_key, ai_data)
        
     return ai_data
+
+
+# ── Main search by URL and AI ─────────────────────────────────────────────────
+@app.post("/searchURLAndAI")
+async def searchURLAndAI(req: SearchRequest):
+    cache_key = f"searchURLAndAI_{req.brand}:{req.model}:{req.year}:{','.join(sorted(req.source_ids or []))}"
+    cached = await cache_get(cache_key)
+    if cached: return cached
+
+    active = sorted(
+        [s for s in sources_store.values() if s["enabled"] and
+         (req.source_ids is None or s["id"] in req.source_ids)],
+        key=lambda s: s.get("priority", 99)
+    )
+
+    query  = f"{req.year} {req.brand} {req.model}"
+    raw: list[dict] = []
+    statuses: dict  = {}
+
+    # ── Build task list ──
+    # Playwright tasks run sequentially (can't share browser easily)
+    # httpx tasks run in parallel
+    playwright_tasks = []
+    httpx_tasks      = []
+
+    for src in active:
+        sid  = src["id"]
+        stype = src.get("type","httpx")
+
+        if stype == "playwright" or sid in ("syarah.com","haraj.com.sa","ksa.Motory.com","toyota.com.sa"):
+            playwright_tasks.append(sid)
+        else:
+            httpx_tasks.append(sid)
+
+    # ── Run Playwright scrapers ──
+    playwright_enabled = PLAYWRIGHT_OK
+
+
+    async def run_playwright(sid):
+        try:
+            # ── تمرير brand/model/year لتفعيل _price_in_range الصحيح ──
+            kw = {"brand": req.brand, "model": req.model, "year": req.year}
+            used_keywords = ["مستعمل", "مستعملة", "used", "pre-owned"]
+            if sid == "syarah.com":
+                results = await playwright_syarah(query, max_results=20, **kw)
+                # #print(f"  [Syarah]after playwright_syarah results: {len(results)}")
+                # فلتر المستعملة — نريد الجديدة فقط لمقارنة الوكلاء
+                results = [
+                        r for r in results
+                        if not any(k in str(r.get("condition", "")).lower() for k in used_keywords)
+                    ]
+                return sid, results
+            elif sid == "haraj.com.sa":
+                # حراج يجلب مستعملة — نحتفظ بها كمعلومة لكن نعلّمها
+                results = await playwright_haraj(query, max_results=20, **kw)
+                # #print(f"  [Haraj]after playwright_haraj results: {results}")
+                    # إذا new_only: احذف المستعملة تماماً
+                # results = [
+                #         r for r in results
+                #         if not any(k in str(r.get("condition", "")).lower() for k in used_keywords)
+                #     ]
+                return sid, results
+            elif sid == "ksa.Motory.com":
+                results = await playwright_motory(query, max_results=20, **kw)
+                results = [r for r in results if "جديد" in str(r.get("condition","")).lower()
+                           or r.get("condition","") in ("New","جديدة")]
+                return sid, results
+            elif sid == "ksa.yallamotor.com":
+                results = await playwright_yallamotor(query, max_results=20, **kw)
+                # #print(f"  [YallaMotor]after playwright_yallamotor results: {len(results)}")
+                 # فلتر المستعملة — نريد الجديدة فقط لمقارنة الوكلاء
+                results = [
+                        r for r in results
+                        if not any(k in str(r.get("condition", "")).lower() for k in used_keywords)
+                                       ]
+                # #print(f"  [YallaMotor]after filtering used: {len(results)}")
+                return sid, results
+            if sid == "toyota.com.sa" and req.brand.lower() == "toyota":
+                model_name = " ".join(query.split()[2:]) if len(query.split()) > 2 else req.model
+                return sid, await playwright_toyota_sa(model_name, year=req.year)
+            elif sid == "lexus.com.sa" and req.brand.lower() == "lexus":
+                model_name = " ".join(query.split()[2:]) if len(query.split()) > 2 else req.model
+                results= await playwright_lexus_sa(model_name, year=req.year)
+                # #print(f"  [Lexus SA]after playwright_lexus_sa results: {results}")
+                return sid,results 
+          
+            return sid, []
+        except Exception as e:
+            return sid, e
+
+    if playwright_enabled and playwright_tasks:
+        # Run playwright in parallel (each opens its own browser instance)
+        pw_results = await asyncio.gather(
+            *[run_playwright(sid) for sid in playwright_tasks],
+            return_exceptions=True
+        )
+        for item in pw_results:
+            if isinstance(item, Exception):
+                #print(f"Playwright gather error: {item}")
+                continue
+            sid, result = item
+            if isinstance(result, Exception):
+                statuses[sid] = {"ok": False, "error": str(result)[:100], "count": 0}
+            else:
+                statuses[sid] = {"ok": True, "count": len(result), "method": "playwright"}
+                raw.extend(result)
+                if result:
+                    print(f"  ✅ {sid}: {len(result)} results via Playwright")
+                else:
+                    print(f"  ⚠️  {sid}: 0 results via Playwright")
+
+    # ── Run httpx scrapers ──
+    #print(f"Starting httpx tasks for sources: {httpx_tasks}")
+    if httpx_tasks:
+        hclient = httpx.AsyncClient(
+            headers={"User-Agent":"Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36"},
+            follow_redirects=True, timeout=SCRAPE_TIMEOUT,
+        )
+        async with hclient as client:
+            htasks = []
+            for sid in httpx_tasks:
+                src = sources_store.get(sid, {})
+                if   sid == "ksa.yallamotor.com":  htasks.append((sid, httpx_yallamotor(query, client)))
+                else:                      htasks.append((sid, httpx_generic(src, query, client)))
+
+            hresults = await asyncio.gather(*[t[1] for t in htasks], return_exceptions=True)
+            for (sid,_), result in zip(htasks, hresults):
+                if isinstance(result, Exception):
+                    statuses[sid] = {"ok": False, "error": str(result)[:100], "count": 0}
+                else:
+                    statuses[sid] = {"ok": True, "count": len(result), "method": "httpx"}
+                    raw.extend(result)
+
+
+    # ── AI fallback if not enough data ──
+    # use_ai = len(raw) < 5 and req.claude_ai
+    use_ai =  req.claude_ai
+    ai_data = None
+    #print(f"  Raw listings: {raw}")
+    if use_ai:
+        #print(f"  ⚠️  Only {len(raw)} real listings — using AI fallback")
+        try:
+            ai_data = await ai_fallback(
+                req.brand, req.model, req.year,
+                [s["id"] for s in active], req.anthropic_key
+            )
+        except Exception as e:
+            print(f"AI fallback error: {e}")
+
+    # ── Classify listings into trims (NEW — trim_classifier engine) ──
+    # بدلاً من رمي كل شيء في bucket واحد، نصنّف كل إعلان حسب الفئة
+    dyn_trims = await fetch_official_trims(req.brand, req.model, req.year, req.anthropic_key)
+    #print(f"  Fetched {len(dyn_trims)} dynamic trims for classification")
+
+    classified = classify_and_structure(
+        raw_listings=raw,
+        brand=req.brand,
+        model=req.model,
+        year=req.year,
+        dynamic_trims=dyn_trims,
+        ai_data=ai_data,
+    )
+
+    # ── بناء الاستجابة النهائية ──
+    final_data = {
+        "vehicle": classified["vehicle"],
+        "brand": classified["brand"],
+        "model": classified["model"],
+        "year": classified["year"],
+        "searchDate": datetime.now().strftime("%B %Y"),
+        "isAIFallback": use_ai,
+        "officialPriceRange": classified["officialPriceRange"],
+        "marketInsight": classified.get("marketInsight",
+            f"تم جمع {len(raw)} إعلان من المصادر الحية — مصنّفة إلى {len(classified['trims'])} فئات"),
+        "priceHistory": classified.get("priceHistory", []),
+        "competitorAnalysis": classified.get("competitorAnalysis",
+            {"summary":"","opportunities":[],"threats":[],"recommendation":""}),
+        "trims": classified["trims"],
+    }
+
+    # Log classification summary
+    for t in final_data["trims"]:
+        n = len(t.get("listings", []))
+        ms = t.get("matchStats", {})
+        print(f"  📊 {t['officialName']}: {n} listings "
+              f"[keyword={ms.get('keyword',0)}, name={ms.get('name',0)}, "
+              f"price={ms.get('price_proximity',0)}, overlap={ms.get('word_overlap',0)}, "
+              f"fallback={ms.get('fallback',0)}]")
+
+    # ── حساب إحصائيات كل مصدر لكل فئة ──
+    _attach_source_stats(final_data)
+
+    final_data.update({
+        "sourceStatuses": statuses,
+        "scrapedCount": len(raw),
+        "isAIFallback": use_ai,
+        "playwrightUsed": playwright_enabled,
+    })
+    # Save price snapshots + DOM records (only for real scraped data)
+    if not use_ai:
+        await _post_search_persist(final_data, req.brand, req.model, req.year)
+    # Enrich with historical trend + days-on-market (from Redis)
+    await _enrich_with_history(final_data, req.brand, req.model, req.year)
+    # Compute dealer pricing recommendation (uses supply + trend + DOM)
+    _attach_dealer_pricing(final_data)
+    await cache_set(cache_key, final_data)
+    return final_data
+
+
 
 def _attach_source_stats(data: dict):
     """
@@ -2005,9 +2214,9 @@ def _attach_source_stats(data: dict):
             condition = str(l.get("condition", "")).strip()
             src_id = l.get("source", "")
             if not condition:
-                if src_id in ("toyota_sa", "motory", "yallamotor"):
+                if src_id in ("toyota.com.sa", "ksa.Motory.com", "ksa.yallamotor.com"):
                     l["condition"] = "جديدة"
-                elif src_id == "haraj":
+                elif src_id == "haraj.com.sa":
                     l["condition"] = "مستعملة"
 
             # VAT status — تحليل ذكي بناءً على المصدر + MSRP + شكل الرقم
@@ -2030,7 +2239,7 @@ def _attach_source_stats(data: dict):
 
                 except Exception as e:
                     # fallback بسيط
-                    if src_id == "haraj":
+                    if src_id == "haraj.com.sa":
                         l["vat_status"] = "unknown"
                         l["priceNote"]  = l.get("priceNote") or "قد لا يشمل VAT"
                     else:
@@ -2048,7 +2257,7 @@ def _attach_source_stats(data: dict):
             price = l.get("price", 0)
             if not price:
                 continue
-            src_name = l.get("sourceName") or l.get("source") or "غير محدد"
+            src_name = l.get("source") or l.get("source") or "غير محدد"
             if src_name not in by_source:
                 by_source[src_name] = {
                     "sourceId":   l.get("source", ""),
@@ -2108,11 +2317,11 @@ def _attach_source_stats(data: dict):
 
 def _source_color(source_id: str) -> str:
     return {
-        "toyota_sa":  "#00C49A",
-        "motory":     "#f5a623",
-        "haraj":      "#ff8055",
-        "yallamotor": "#a78bfa",
-        "syarah":     "#4da6ff",
+        "toyota.com.sa":  "#00C49A",
+        "ksa.Motory.com":     "#f5a623",
+        "haraj.com.sa":      "#ff8055",
+        "ksa.yallamotor.com": "#a78bfa",
+        "syarah.com":     "#4da6ff",
     }.get(source_id, "#6B7280")
 
 
