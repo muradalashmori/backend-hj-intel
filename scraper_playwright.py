@@ -534,13 +534,13 @@ async def playwright_syarah(query: str, max_results: int = 15,
 
     urls_to_try = [
         # URL الأساسي الصحيح — صفحة الموديل مع فلتر السنة
-        f"https://syarah.com.com/autos/{brand_slug}/{model_slug}/{year_val}?type=new",
-        f"https://syarah.com.com/cars/{brand_slug}/{model_slug}?year={year_val}&type=new",
-        f"https://syarah.com.com/cars/{brand_slug}/{model_slug}?year={year_val}",
-        f"https://syarah.com.com/cars/{brand_slug}/{model_slug}",
+        f"https://syarah.com/autos/{brand_slug}/{model_slug}/{year_val}?type=new",
+        f"https://syarah.com/cars/{brand_slug}/{model_slug}?year={year_val}&type=new",
+        f"https://syarah.com/cars/{brand_slug}/{model_slug}?year={year_val}",
+        f"https://syarah.com/cars/{brand_slug}/{model_slug}",
         # fallback — البحث النصي
-        f"https://syarah.com.com/filters?make={brand_slug}&model={model_slug}&year={year_val}&type=new",
-        f"https://syarah.com.com/search?q={brand_slug}+{model_slug}+{year_val}",
+        f"https://syarah.com/filters?make={brand_slug}&model={model_slug}&year={year_val}&type=new",
+        f"https://syarah.com/search?q={brand_slug}+{model_slug}+{year_val}",
     ]
 
     async def _do_syarah():
@@ -563,10 +563,10 @@ async def playwright_syarah(query: str, max_results: int = 15,
             found = []
             for url in urls_to_try:
                 try:
-                    #print(f"  [Syarah] {url}")
-                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    print(f"  [Syarah] {url}")
+                    await page.goto(url, wait_until="domcontentloaded", timeout=60000)
                     # try:
-                    #     await page.wait_for_load_state("networkidle", timeout=30000)
+                    #     await page.wait_for_load_state("networkidle", timeout=60000)
                     # except:
                     #     await asyncio.sleep(3)
 
@@ -574,7 +574,7 @@ async def playwright_syarah(query: str, max_results: int = 15,
                     try:
                         await page.wait_for_selector(
                             "[class*='posts-card'][class*='posts-card-body'][class*='car-card'],[class*='CarCard'],[class*='listing-card'],article,[data-car-id]",
-                            timeout=30000)
+                            timeout=60000)
                     except:
                         await asyncio.sleep(3)
                   
@@ -650,7 +650,7 @@ def _syarah_from_next_data(html, brand, model, year):
             "dealer" if car.get("is_dealer") else "individual",
             _parse_days(car.get("created_at") or ""),
             car.get("main_image") or car.get("image") or _default_img(f"{brand} {model}"),
-            f"https://syarah.com.com/filters?text={car.get('id','')}",
+            f"https://syarah.com/filters?text={car.get('id','')}",
             "", "high", "Syarah — NEXT_DATA JSON"))
     return out
 
@@ -673,7 +673,7 @@ def _syarah_from_api(data, brand, model):
             "0 كم", car.get("city") or "غير محدد",
             car.get("seller_name") or "Syarah", "dealer", 0,
             _default_img(f"{brand} {model}"),
-            f"https://syarah.com.com/cars/{car.get('id','')}",
+            f"https://syarah.com/cars/{car.get('id','')}",
             "", "high", "Syarah — API"))
     return out
 
@@ -767,7 +767,7 @@ def _syarah_from_html(html, brand, model, year):
                 "dealer",
                 0,
                 _default_img(f"{brand} {model}"),
-                f"https://syarah.com.com/cars/{brand}/{model}/{year}" if url else "",
+                f"https://syarah.com/cars/{brand}/{model}/{year}" if url else "",
                 "",
                 "low",
                 "Syarah — HYBRID CSS"
@@ -821,7 +821,7 @@ def _syarah_from_html(html, brand, model, year):
                     "dealer",
                     0,
                     _default_img(f"{brand} {model}"),
-                    f"https://syarah.com.com/search?q={brand}+{model}",
+                    f"https://syarah.com/search?q={brand}+{model}",
                     "",
                     "low",
                     "Syarah — HYBRID REGEX"
@@ -841,7 +841,7 @@ async def playwright_haraj(query: str, max_results: int = 15,
     year_str = str(year) if year else ""
     query_ar = f"{brand} {model} {year_str}".strip()
     urls_to_try = [
-        f"https://haraj.com.sa.com.sa/search/{query.replace(' ','%20')}",
+        f"https://haraj.com.sa/search/{query.replace(' ','%20')}",
     ]
     async def _do_haraj():
         async with async_playwright() as pw:
@@ -857,7 +857,7 @@ async def playwright_haraj(query: str, max_results: int = 15,
             for url in urls_to_try:
                 try:
                     #print(f"  [Haraj] {url}")
-                    await page.goto(url, wait_until="networkidle", timeout=30000)
+                    await page.goto(url, wait_until="networkidle", timeout=60000)
                     try:
                         await page.wait_for_selector(
                             "[class*='post'],[class*='item'],[class*='card'],.post-title",
@@ -963,7 +963,7 @@ def _haraj_from_next_data(html, brand, model, year):
             img = _default_img(title)
 
         # ── الرابط ──────────────────────────
-        url = post.get("url") or f"https://haraj.com.sa.com.sa/{post.get('id','')}"
+        url = post.get("url") or f"https://haraj.com.sa/{post.get('id','')}"
 
         out.append(_L(
             "haraj.com.sa", "Haraj.com.sa",
@@ -1085,7 +1085,7 @@ def _haraj_from_html(html, brand, model):
                 "individual",
                 0,
                 _default_img(f"{brand} {model}"),
-                f"https://haraj.com.sa.com.sa{url}" if url else "",
+                f"https://haraj.com.sa{url}" if url else "",
                 "لا يمكن التحقق من الضريبة",
                 "low",
                 "حراج — HTML (SMART)"
@@ -1181,7 +1181,7 @@ async def playwright_toyota_sa(model: str, year: int = 0) -> list[dict]:
             for url in urls:
                 try:
                     #print(f"  [Toyota SA] {url}")
-                    resp = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    resp = await page.goto(url, wait_until="domcontentloaded", timeout=60000)
                     if not resp or resp.status >= 400: continue
                     try:
                         await page.wait_for_load_state("networkidle", timeout=10000)
@@ -1389,7 +1389,7 @@ async def playwright_lexus_sa(model: str, year: int = 0) -> list[dict]:
             for url in urls:
                 try:
                     #print(f"  [Lexus SA] {url}")
-                    resp = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    resp = await page.goto(url, wait_until="domcontentloaded", timeout=60000)
                     if not resp or resp.status >= 400: continue
                     try:
                         await page.wait_for_load_state("networkidle", timeout=10000)
@@ -1571,11 +1571,11 @@ async def playwright_motory(query: str, max_results: int = 10,
     yr = year or 0
 
     urls_to_try = [
-        f"https://ksa.ksa.Motory.com.com/en/new-cars/{b}/{mo}/{yr}"
-        # f"https://ksa.Motory.com.com/sa/new-cars/{b}/{mo}/{yr}",
-        # f"https://ksa.Motory.com.com/sa/new-cars/{b}/{mo}?year={yr}",
-        # f"https://ksa.Motory.com.com/sa/new-cars/{b}/{mo}",
-        # f"https://ksa.Motory.com.com/sa/new-cars/search?q={b}+{mo}+{yr}",
+        f"https://ksa.Motory.com/en/new-cars/{b}/{mo}/{yr}"
+        # f"https://ksa.Motory.com/sa/new-cars/{b}/{mo}/{yr}",
+        # f"https://ksa.Motory.com/sa/new-cars/{b}/{mo}?year={yr}",
+        # f"https://ksa.Motory.com/sa/new-cars/{b}/{mo}",
+        # f"https://ksa.Motory.com/sa/new-cars/search?q={b}+{mo}+{yr}",
     ]
     async def _do_motory():
         async with async_playwright() as pw:
@@ -1586,8 +1586,8 @@ async def playwright_motory(query: str, max_results: int = 10,
             found = []
             for url in urls_to_try:
                 try:
-                    #print(f"  [Motory] {url}")
-                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    print(f"  [Motory] {url}")
+                    await page.goto(url, wait_until="domcontentloaded", timeout=60000)
                     try:
                         await page.wait_for_load_state("networkidle", timeout=8000)
                     except:
@@ -1649,7 +1649,7 @@ def _motory_from_next_data(html, brand, model, year):
             item.get("dealer") or item.get("seller") or "Motory",
             "dealer", 0,
             item.get("image") or item.get("thumbnail") or _default_img(f"{brand} {model}"),
-            f"https://ksa.Motory.com.com/sa/cars/{item.get('slug','')}",
+            f"https://ksa.Motory.com/sa/cars/{item.get('slug','')}",
             "", "high", "Motory — NEXT_DATA"))
     return out
 
@@ -1671,7 +1671,7 @@ def _motory_from_html(html, brand, model, year):
                 f"{brand} {model}".strip(),"جديدة",price,"0 كم",
                 "المملكة العربية السعودية","Motory","dealer",0,
                 _default_img(f"{brand} {model}"),
-                f"https://ksa.ksa.Motory.com.com/en/new-cars/{brand.lower()}/{model.lower()}/{year}",
+                f"https://ksa.Motory.com/en/new-cars/{brand.lower()}/{model.lower()}/{year}",
                 "","medium","Motory — HTML"))
     return out
 
@@ -1690,11 +1690,11 @@ async def playwright_yallamotorhttp(query: str, max_results: int = 10,
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
         "Accept": "application/json, text/html, */*",
-        "Referer": "https://www.ksa.yallamotor.com.com",
+        "Referer": "https://www.ksa.yallamotor.com",
         "Accept-Language": "ar,en;q=0.9",
     }
     urls = [
-        f"https://ksa.ksa.yallamotor.com.com/ar/new-cars?query={query.replace(' ','+')}",
+        f"https://ksa.yallamotor.com/ar/new-cars?query={query.replace(' ','+')}",
     ]
     results = []
     async with httpx.AsyncClient(timeout=20, headers=headers, follow_redirects=True) as client:
@@ -1702,7 +1702,7 @@ async def playwright_yallamotorhttp(query: str, max_results: int = 10,
             try:
                 r = await client.get(url)
                 ct = r.headers.get("content-type","")
-                #print(f"  [YallaMotor] {url.split('ksa.yallamotor.com.com')[1][:50]} → {r.status_code}")
+                #print(f"  [YallaMotor] {url.split('ksa.yallamotor.com')[1][:50]} → {r.status_code}")
                 if r.status_code != 200: continue
 
                 if "json" in ct:
@@ -1722,7 +1722,7 @@ async def playwright_yallamotorhttp(query: str, max_results: int = 10,
                             "جديدة",price,"0 كم","المملكة العربية السعودية",
                             item.get("dealer") or "YallaMotor","dealer",0,
                             item.get("image") or _default_img(f"{brand} {model}"),
-                            f"https://www.ksa.yallamotor.com.com{item.get('url','') or '/new-cars/'+b+'/'+mo}",
+                            f"https://www.ksa.yallamotor.com{item.get('url','') or '/new-cars/'+b+'/'+mo}",
                             "","high","YallaMotor — API"))
                     if results: break
                 else:
@@ -1766,7 +1766,7 @@ async def playwright_yallamotor(query: str, max_results: int = 15,
 
     urls_to_try = [
         # URL الأساسي الصحيح — صفحة الموديل مع فلتر السنة
-         f"https://ksa.ksa.yallamotor.com.com/en/new-cars/{brand_slug}/{model_slug}/{year_val}",
+         f"https://ksa.yallamotor.com/en/new-cars/{brand_slug}/{model_slug}/{year_val}",
     ]
 
     async def _do_yallamotor():
@@ -1789,10 +1789,10 @@ async def playwright_yallamotor(query: str, max_results: int = 15,
             found = []
             for url in urls_to_try:
                 try:
-                    #print(f"  [Syarah] {url}")
-                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    print(f"  [YallaMotor] {url}")
+                    await page.goto(url, wait_until="domcontentloaded", timeout=60000)
                     # try:
-                    #     await page.wait_for_load_state("networkidle", timeout=30000)
+                    #     await page.wait_for_load_state("networkidle", timeout=60000)
                     # except:
                     #     await asyncio.sleep(3)
 
@@ -1800,7 +1800,7 @@ async def playwright_yallamotor(query: str, max_results: int = 15,
                     try:
                         await page.wait_for_selector(
                             "[class*='posts-card'][class*='posts-card-body'][class*='car-card'],[class*='CarCard'],[class*='listing-card'],article,[data-car-id]",
-                            timeout=30000)
+                            timeout=60000)
                     except:
                         await asyncio.sleep(3)
                   
@@ -1876,7 +1876,7 @@ def _yallamotor_from_next_data(html, brand, model, year):
             "dealer" if car.get("is_dealer") else "individual",
             _parse_days(car.get("created_at") or ""),
             car.get("main_image") or car.get("image") or _default_img(f"{brand} {model}"),
-            f"https://ksa.ksa.yallamotor.com.com/ar/new-cars?query={car.get('id','')}",
+            f"https://ksa.yallamotor.com/ar/new-cars?query={car.get('id','')}",
             "", "high", "YallaMotor — NEXT_DATA JSON"))
     return out
 
@@ -1899,7 +1899,7 @@ def _yallamotor_from_api(data, brand, model):
             "0 كم", car.get("city") or "غير محدد",
             car.get("seller_name") or "Syarah", "dealer", 0,
             _default_img(f"{brand} {model}"),
-            f"https://ksa.ksa.yallamotor.com.com/ar/new-cars?query={car.get('id','')}",
+            f"https://ksa.yallamotor.com/ar/new-cars?query={car.get('id','')}",
             "", "high", "YallaMotor — API"))
     return out
 
@@ -1991,7 +1991,7 @@ def _yallamotor_from_html(html, brand, model, year):
                 "dealer",
                 0,
                 _default_img(title),
-                f"https://ksa.ksa.yallamotor.com.com/en/new-cars/{brand}/{model}/{year}" if url else "",
+                f"https://ksa.yallamotor.com/en/new-cars/{brand}/{model}/{year}" if url else "",
                 "",
                 "low",
                 "YallaMotor — SMART"

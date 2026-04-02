@@ -56,10 +56,10 @@ _mem_cache: dict  = {}
 DEFAULT_SOURCES = {
     "toyota.com.sa":  {"id":"toyota.com.sa",  "name":"Toyota.com.sa",  "name_ar":"تويوتا السعودية", "url":"https://www.toyota.com.sa",  "color":"#00C49A","enabled":True, "type":"playwright","priority":1,"search_url":"https://www.toyota.com.sa/en/models/{model}", "category":"official"},
     "lexus.com.sa":   {"id":"lexus.com.sa",   "name":"Lexus.com.sa",   "name_ar":"لكسัส",            "url":"https://www.lexus.com.sa",    "color":"#00C49A","enabled":True, "type":"playwright","priority":2,"search_url":"https://www.lexus.com.sa/en/models/{model}", "category":"official"},
-    "ksa.Motory.com":     {"id":"ksa.Motory.com",     "name":"ksa.Motory.com",  "name_ar":"موتوري",          "url":"https://ksa.ksa.Motory.com.com",          "color":"#f5a623","enabled":True, "type":"playwright","priority":3,"search_url":"https://ksa.Motory.com.com/sa/new-cars/search?q={query}", "category":"new_cars"},
-    "haraj.com.sa":      {"id":"haraj.com.sa",      "name":"Haraj.com.sa",   "name_ar":"حراج",            "url":"https://haraj.com.sa.com.sa",        "color":"#ff8055","enabled":True, "type":"playwright","priority":4,"search_url":"https://haraj.com.sa.com.sa/search/{query}",            "category":"marketplace"},
-    "ksa.yallamotor.com": {"id":"ksa.yallamotor.com", "name":"ksa.yallamotor.com",     "name_ar":"يلا موتور",       "url":"https://www.ksa.yallamotor.com.com",  "color":"#a78bfa","enabled":True, "type":"playwright",    "priority":5,"search_url":"https://ksa.ksa.yallamotor.com.com/ar/new-cars?query={query}&country=sa", "category":"new_cars"},
-    "syarah.com":     {"id":"syarah.com",     "name":"Syarah.com",     "name_ar":"سيارة",           "url":"https://syarah.com.com",          "color":"#4da6ff","enabled":True, "type":"playwright","priority":6,"search_url":"https://syarah.com.com/filters?text={query}",        "category":"marketplace"},
+    "ksa.Motory.com":     {"id":"ksa.Motory.com",     "name":"ksa.Motory.com",  "name_ar":"موتوري",          "url":"https://ksa.Motory.com",          "color":"#f5a623","enabled":True, "type":"playwright","priority":3,"search_url":"https://ksa.Motory.com/sa/new-cars/search?q={query}", "category":"new_cars"},
+    "haraj.com.sa":      {"id":"haraj.com.sa",      "name":"Haraj.com.sa",   "name_ar":"حراج",            "url":"https://haraj.com.sa",        "color":"#ff8055","enabled":True, "type":"playwright","priority":4,"search_url":"https://haraj.com.sa/search/{query}",            "category":"marketplace"},
+    "ksa.yallamotor.com": {"id":"ksa.yallamotor.com", "name":"ksa.yallamotor.com",     "name_ar":"يلا موتور",       "url":"https://www.ksa.yallamotor.com",  "color":"#a78bfa","enabled":True, "type":"playwright",    "priority":5,"search_url":"https://ksa.yallamotor.com/ar/new-cars?query={query}&country=sa", "category":"new_cars"},
+    "syarah.com":     {"id":"syarah.com",     "name":"Syarah.com",     "name_ar":"سيارة",           "url":"https://syarah.com",          "color":"#4da6ff","enabled":True, "type":"playwright","priority":6,"search_url":"https://syarah.com/filters?text={query}",        "category":"marketplace"},
 }
 
 def _load_sources() -> dict:
@@ -959,10 +959,10 @@ async def httpx_yallamotor(query, client):
     year = parts[0] if parts and parts[0].isdigit() else ""
     brand = parts[1] if len(parts)>1 else ""
     model = " ".join(parts[2:]) if len(parts)>2 else ""
-    for url in [f"https://www.ksa.yallamotor.com.com/api/new-cars?brand={brand}&model={model}&year={year}&country=sa&limit=12",
-                f"https://www.ksa.yallamotor.com.com/api/v2/listings?q={_qenc(query)}&country=sa&limit=12"]:
+    for url in [f"https://www.ksa.yallamotor.com/api/new-cars?brand={brand}&model={model}&year={year}&country=sa&limit=12",
+                f"https://www.ksa.yallamotor.com/api/v2/listings?q={_qenc(query)}&country=sa&limit=12"]:
         try:
-            r = await client.get(url, headers={"Referer":"https://www.ksa.yallamotor.com.com/"}, timeout=SCRAPE_TIMEOUT)
+            r = await client.get(url, headers={"Referer":"https://www.ksa.yallamotor.com/"}, timeout=SCRAPE_TIMEOUT)
             if r.status_code==200 and "json" in r.headers.get("content-type",""):
                 cars = r.json().get("data") or r.json().get("cars") or r.json().get("results") or []
                 for c in cars[:10]:
@@ -971,7 +971,7 @@ async def httpx_yallamotor(query, client):
                         out.append(_L("ksa.yallamotor.com","YallaMotor.com",c.get("name") or query,
                             "جديدة",p,"0 كم",c.get("city") or "السعودية",
                             c.get("dealer_name") or "YallaMotor","dealer",0,
-                            c.get("image") or _img(query),c.get("url") or "https://www.ksa.yallamotor.com.com",
+                            c.get("image") or _img(query),c.get("url") or "https://www.ksa.yallamotor.com",
                             (c.get("specs") or "")[:80],"high","YallaMotor — جديد"))
                 if out: break
         except Exception as e: print(f"YallaMotor: {e}")
