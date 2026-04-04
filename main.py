@@ -671,7 +671,7 @@ class Brand(BaseModel):
 class Group(BaseModel):
     ListTreeGroups: str  = None
     brandID: str = None
-    Year: str = None
+    year: int = None
     DescriptionAr: str = None
     DescriptionEn: str = None
     Description: str = None
@@ -811,7 +811,7 @@ async def get_trims_action(req: TrimsRequest):
         del _trim_cache[key]
     
     trims = await fetch_official_trims(req.brand, req.model, req.year, req.anthropic_key)
-    configured = bool(get_trims(req.brand, req.model))
+    configured = bool(get_trims(req.brand, req.model, req.year))  # Check if we have config for this trim
     return {
         "brand": req.brand, "model": req.model, "year": req.year,
         "source": "config" if configured
@@ -1249,14 +1249,14 @@ async def httpx_generic(source, query, client):
 # NOTE: TRIM_RULES is deprecated; the system now uses TRIM_CONFIG from trims_config.py.
 # Add/adjust trims in trims_config.py to affect normalization and fetching.
 
-def normalize_trim(title: str, brand: str, model: str) -> tuple[str, str, float]:
+def normalize_trim(title: str, brand: str, model: str, year: int) -> tuple[str, str, float]:
     """Primary normalizer — uses trims_config.py (edit that file to add trims).
 
     If no config exists for the brand/model, returns a generic name.
     """
-    configured = get_trims(brand, model)
+    configured = get_trims(brand, model, year)  # Check if we have any config for this brand/model
     if configured:
-        return normalize_from_config(title, brand, model)
+        return normalize_from_config(title, brand, model, year)
 
     # No config found — fall back to a safe generic match.
     return f"{model} Standard", "مطابقة عامة", 0.50
@@ -1291,7 +1291,7 @@ async def fetch_official_trims(brand: str, model: str, year: int,
     key = (brand.lower(), model.lower(), year)
 
     # 1. Config-defined trims (fast, explicit)
-    configured = get_trims(brand, model)
+    configured = get_trims(brand, model, year)
     if configured:
         return [
             TrimInfo(name=t.name.lower(), name_ar=t.name_ar, msrp=t.msrp, engine=t.engine,
@@ -1462,14 +1462,14 @@ RULES:
         return []
 
 
-def normalize_trim_dynamic(title: str, brand: str, model: str,
+def normalize_trim_dynamic(title: str, brand: str, model: str, year: int,
                              fetched_trims: list) -> tuple[str, str, float]:
     """
     Enhanced normalize_trim that uses dynamically fetched trims.
     Falls back to normalize_trim (which uses TRIM_CONFIG) if no dynamic trims are available.
     """
     if not fetched_trims:
-        return normalize_trim(title, brand, model)
+        return normalize_trim(title, brand, model, year)
     
     t = title.lower()
     best_match = None
@@ -1592,6 +1592,8 @@ async def ai_fallback(brand, model, year, source_ids, key):
         )
     else:
         trims_hint = "ALL official trims for {year} {brand} {model} in Saudi"
+
+    print(f"AI fallback trims hint: {trims_hint}")  # Log the trims hint for debugging    
 
     prompt = f"""KSA car market pricing expert. Vehicle: {year} {brand} {model}. Date: {datetime.now().strftime('%B %Y')}.
 Sources: {', '.join(names)}.
@@ -1985,7 +1987,7 @@ async def searchURLAndAI(req: SearchRequest):
             used_keywords = ["مستعمل", "مستعملة", "used", "pre-owned"]
             if sid == "syarah.com":
                 results = await playwright_syarah(query, max_results=20, **kw)
-                # #print(f"  [Syarah]after playwright_syarah results: {len(results)}")
+                # print(f"  [Syarah]after playwright_syarah results: {results}")
                 # فلتر المستعملة — نريد الجديدة فقط لمقارنة الوكلاء
                 results = [
                         r for r in results
@@ -1995,21 +1997,23 @@ async def searchURLAndAI(req: SearchRequest):
             elif sid == "haraj.com.sa":
                 # حراج يجلب مستعملة — نحتفظ بها كمعلومة لكن نعلّمها
                 results = await playwright_haraj(query, max_results=20, **kw)
-                # #print(f"  [Haraj]after playwright_haraj results: {results}")
+                # print(f"  [Haraj]after playwright_haraj results: {results}")
                     # إذا new_only: احذف المستعملة تماماً
-                # results = [
-                #         r for r in results
-                #         if not any(k in str(r.get("condition", "")).lower() for k in used_keywords)
-                #     ]
+                results = [
+                        r for r in results
+                        if not any(k in str(r.get("condition", "")).lower() for k in used_keywords)
+                    ]
                 return sid, results
             elif sid == "ksa.Motory.com":
                 results = await playwright_motory(query, max_results=20, **kw)
+                # print(f"  [Motory]after playwright_motory results: {results}")
+                 # فلتر المستعملة — نريد الجديدة فقط لمقارنة الوكلاء
                 results = [r for r in results if "جديد" in str(r.get("condition","")).lower()
                            or r.get("condition","") in ("New","جديدة")]
                 return sid, results
             elif sid == "ksa.yallamotor.com":
                 results = await playwright_yallamotor(query, max_results=20, **kw)
-                # #print(f"  [YallaMotor]after playwright_yallamotor results: {len(results)}")
+                # print(f"  [YallaMotor]after playwright_yallamotor results: {results}")
                  # فلتر المستعملة — نريد الجديدة فقط لمقارنة الوكلاء
                 results = [
                         r for r in results
@@ -2017,7 +2021,7 @@ async def searchURLAndAI(req: SearchRequest):
                                        ]
                 # #print(f"  [YallaMotor]after filtering used: {len(results)}")
                 return sid, results
-            if sid == "toyota.com.sa" and req.brand.lower() == "toyota":
+            elif sid == "toyota.com.sa" and req.brand.lower() == "toyota":
                 model_name = " ".join(query.split()[2:]) if len(query.split()) > 2 else req.model
                 return sid, await playwright_toyota_sa(model_name, year=req.year)
             elif sid == "lexus.com.sa" and req.brand.lower() == "lexus":
@@ -2028,6 +2032,7 @@ async def searchURLAndAI(req: SearchRequest):
           
             return sid, []
         except Exception as e:
+            print(f"  [{sid}] Error occurred: {e}")
             return sid, e
 
     if playwright_enabled and playwright_tasks:
@@ -2075,8 +2080,8 @@ async def searchURLAndAI(req: SearchRequest):
 
 
     # ── AI fallback if not enough data ──
-    # use_ai = len(raw) < 5 and req.claude_ai
-    use_ai =  req.claude_ai
+    use_ai = len(raw) < 5 and req.claude_ai
+    # use_ai =  req.claude_ai
     ai_data = None
     #print(f"  Raw listings: {raw}")
     if use_ai:
@@ -2092,7 +2097,16 @@ async def searchURLAndAI(req: SearchRequest):
     # ── Classify listings into trims (NEW — trim_classifier engine) ──
     # بدلاً من رمي كل شيء في bucket واحد، نصنّف كل إعلان حسب الفئة
     dyn_trims = await fetch_official_trims(req.brand, req.model, req.year, req.anthropic_key)
-    #print(f"  Fetched {len(dyn_trims)} dynamic trims for classification")
+    #طباعه لعرض الفئات الديناميكية المسترجعة من الكاتالوج أو AI
+    for t in dyn_trims:
+     print({
+        "name": t.name,
+        "name_ar": t.name_ar,
+        "msrp": t.msrp,
+        "engine": t.engine,
+        "keywords": t.keywords,
+        "score": t.score
+     })
 
     classified = classify_and_structure(
         raw_listings=raw,

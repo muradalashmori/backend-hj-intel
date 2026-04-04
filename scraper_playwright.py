@@ -1593,9 +1593,11 @@ async def playwright_motory(query: str, max_results: int = 10,
                     except:
                         await asyncio.sleep(3)
                     html = await page.content()
-                    found = _motory_from_next_data(html, brand, model, yr)
+                    found = _motory_from_next_data(html, brand, model, year)
+                    # print(f"  [Motory] Found {len(found)} results from NEXT_DATA")
                     if found: break
                     found = _motory_from_html(html, brand, model, year)
+                    # print(f"  [Motory] Found {len(found)} results from HTML")
                     if found: break
                 except Exception as e:
                     print(f"  [Motory] url error: {e}")
@@ -1653,29 +1655,34 @@ def _motory_from_next_data(html, brand, model, year):
             "", "high", "Motory — NEXT_DATA"))
     return out
 
-
 def _motory_from_html(html, brand, model, year):
+    soup = BeautifulSoup(html, "html.parser")
+
     out = []
-    seen = set()
-    for pat in [
-        r'(?:SAR|ريال|﷼)\s*([\d,]{5,8})',
-        r'([\d,]{5,8})\s*(?:SAR|ريال|﷼)',
-        r'"price":\s*(\d{5,7})',
-    ]:
-        for raw in re.findall(pat, html, re.IGNORECASE):
-            price = _clean_price(str(raw))
-            if not price or price in seen: continue
-            if not _price_in_range(price, brand, model): continue
-            seen.add(price)
-            out.append(_L("ksa.Motory.com","Motory.com",
-                f"{brand} {model}".strip(),"جديدة",price,"0 كم",
+
+    # كل سيارة داخل car-card
+    cars = soup.select("app-car-card .car-card")
+    print(f"  [Motory] Found {len(cars)} car cards in HTML")
+    for car in cars:
+        # العنوان
+        title_tag = car.select_one(".title a")
+        print(f"  [Motory] title_tag: {title_tag} ")
+        title = title_tag.get_text(strip=True) if title_tag else None
+        print(f"  [Motory] Car title: {title} ")
+        # السعر
+        price_tag = car.select_one(".price .value")
+        print(f"  [Motory] price_tag: {price_tag} ")
+        price = price_tag.get_text(strip=True) if price_tag else None
+        price = _clean_price(price)
+        print(f"  [Motory] Car price: {price} ")
+        out.append(_L("ksa.Motory.com","Motory.com",
+                f"{title}","جديدة",price,"0 كم",
                 "المملكة العربية السعودية","Motory","dealer",0,
                 _default_img(f"{brand} {model}"),
                 f"https://ksa.Motory.com/en/new-cars/{brand.lower()}/{model.lower()}/{year}",
                 "","medium","Motory — HTML"))
+
     return out
-
-
 # ══════════════════════════════════════════════════════════════════
 #  YALLAMOTOR SCRAPER
 # ══════════════════════════════════════════════════════════════════
