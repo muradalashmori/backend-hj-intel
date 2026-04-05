@@ -639,6 +639,7 @@ class SearchRequest(BaseModel):
     year: int
     anthropic_key: str
     source_ids: Optional[list[str]] = None
+    disableCache: bool = False  # افتراضي: عدم تعطيل الكاش
     new_only: bool = True   # افتراضي: جديدة فقط (يستثني المستعملة من Haraj)
     claude_ai: bool = True  # افتراضي: عدم استخدام الذكاء الاصطناعي
 
@@ -1948,8 +1949,10 @@ async def searchByAI(req: SearchRequest):
 @app.post("/searchURLAndAI")
 async def searchURLAndAI(req: SearchRequest):
     cache_key = f"searchURLAndAI_{req.brand}:{req.model}:{req.year}:{','.join(sorted(req.source_ids or []))}"
-    cached = await cache_get(cache_key)
-    if cached: return cached
+
+    if not req.disableCache:
+     cached = await cache_get(cache_key)
+     if cached: return cached
 
     active = sorted(
         [s for s in sources_store.values() if s["enabled"] and
@@ -2098,16 +2101,8 @@ async def searchURLAndAI(req: SearchRequest):
     # بدلاً من رمي كل شيء في bucket واحد، نصنّف كل إعلان حسب الفئة
     dyn_trims = await fetch_official_trims(req.brand, req.model, req.year, req.anthropic_key)
     #طباعه لعرض الفئات الديناميكية المسترجعة من الكاتالوج أو AI
-    for t in dyn_trims:
-     print({
-        "name": t.name,
-        "name_ar": t.name_ar,
-        "msrp": t.msrp,
-        "engine": t.engine,
-        "keywords": t.keywords,
-        "score": t.score
-     })
-
+    # print(f"dyn_trims names :{[t.name for t in dyn_trims]}")
+     
     classified = classify_and_structure(
         raw_listings=raw,
         brand=req.brand,

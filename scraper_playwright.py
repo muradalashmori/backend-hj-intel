@@ -1193,7 +1193,7 @@ async def playwright_toyota_sa(model: str, year: int = 0) -> list[dict]:
                     #print(f" _toyota_from_next_data: {len(found)} results")
                     if found: break
                     found = _toyota_from_html(html, model, year, url)
-                    #print(f" _toyota_from_html: {len(found)} results")
+                    # print(f" _toyota_from_html: {found} results")
                     if found: break
                 except Exception as e:
                     print(f"  [Toyota SA] url error: {e}")
@@ -1662,19 +1662,14 @@ def _motory_from_html(html, brand, model, year):
 
     # كل سيارة داخل car-card
     cars = soup.select("app-car-card .car-card")
-    print(f"  [Motory] Found {len(cars)} car cards in HTML")
     for car in cars:
         # العنوان
         title_tag = car.select_one(".title a")
-        print(f"  [Motory] title_tag: {title_tag} ")
         title = title_tag.get_text(strip=True) if title_tag else None
-        print(f"  [Motory] Car title: {title} ")
         # السعر
         price_tag = car.select_one(".price .value")
-        print(f"  [Motory] price_tag: {price_tag} ")
         price = price_tag.get_text(strip=True) if price_tag else None
         price = _clean_price(price)
-        print(f"  [Motory] Car price: {price} ")
         out.append(_L("ksa.Motory.com","Motory.com",
                 f"{title}","جديدة",price,"0 كم",
                 "المملكة العربية السعودية","Motory","dealer",0,

@@ -40,105 +40,8 @@ class TrimMatch:
     match_method: str          # "keyword" | "name" | "price_proximity" | "fallback"
     match_detail: str          # تفصيل المطابقة
 
-
-# def classify_listing(listing: dict, brand: str, model: str, year: int,
-#                      dynamic_trims: list = None) -> TrimMatch:
-#     """
-#     يصنّف إعلان واحد إلى الفئة الصحيحة.
-
-#     أولوية المطابقة:
-#       1. Keyword match (أعلى دقة) — كلمات مثل "لوميير", "vxr", "y limited"
-#       2. Trim name match — اسم الفئة الرسمي في العنوان
-#       3. Price proximity — أقرب MSRP للسعر المعلن
-#       4. Fallback — إذا لم يتطابق شيء → وضع اسم الاعلان نفسة
-#     """
-#     title = (listing.get("listedAs") or "").lower().strip()
-#     price = listing.get("price", 0)
-#     print(f"Classifying listing: «{title}» with price {price}")
-#     # ── جمع كل الفئات المتاحة ────────────────────────────────
-#     trims = _build_trim_list(brand, model, year, dynamic_trims)
-#     if not trims:
-#         return TrimMatch(
-#             trim_name=f"{model} Standard", trim_name_ar=f"{model} ستاندرد",
-#             trim_id="UNKNOWN", msrp=0, engine="",
-#             confidence=0.40, match_method="fallback",
-#             match_detail="لا توجد فئات محددة لهذا الموديل"
-#         )
-
-#     # ── الجولة 1: Keyword Match (الأدق) ──────────────────────
-#     for trim in trims:
-#         for kw in trim["keywords"]:
-#             if not kw or len(kw) < 2:
-#                 continue
-#             # مطابقة دقيقة — الكلمة المفتاحية موجودة في العنوان
-#             if kw in title:
-#                 return TrimMatch(
-#                     trim_name=trim["name"], trim_name_ar=trim["name_ar"],
-#                     trim_id=trim["id"], msrp=trim["msrp"], engine=trim["engine"],
-#                     confidence=trim["score"],
-#                     match_method="keyword",
-#                     match_detail=f"كلمة مفتاحية: «{kw}»"
-#                 )
-
-#     # ── الجولة 2: Trim Name Match ────────────────────────────
-#     for trim in trims:
-#         name_l = trim["name"].lower()
-#         name_ar_l = trim["name_ar"].lower()
-#         if name_l in title or name_ar_l in title:
-#             return TrimMatch(
-#                 trim_name=trim["name"], trim_name_ar=trim["name_ar"],
-#                 trim_id=trim["id"], msrp=trim["msrp"], engine=trim["engine"],
-#                 confidence=trim["score"] * 0.95,
-#                 match_method="name",
-#                 match_detail=f"اسم الفئة: «{trim['name']}»"
-#             )
-
-#     # ── الجولة 3: Word Overlap Match ─────────────────────────
-#     best_overlap = None
-#     best_overlap_score = 0.0
-#     for trim in trims:
-#         words = [w for w in trim["name"].lower().split() if len(w) > 0]
-#         if not words:
-#             continue
-#         hits = sum(1 for w in words if w in title)
-#         score = hits / len(words)
-#         if score > best_overlap_score and score >= 0.4:
-#             best_overlap_score = score
-#             best_overlap = trim
-
-#     if best_overlap and best_overlap_score >= 0.4:
-#         return TrimMatch(
-#             trim_name=best_overlap["name"], trim_name_ar=best_overlap["name_ar"],
-#             trim_id=best_overlap["id"], msrp=best_overlap["msrp"], engine=best_overlap["engine"],
-#             confidence=0.55 + best_overlap_score * 0.2,
-#             match_method="word_overlap",
-#             match_detail=f"تطابق جزئي ({best_overlap_score:.0%}) مع «{best_overlap['name']}»"
-#         )
-
-#     # ── الجولة 4: Price Proximity (إذا السعر متاح) ───────────
-#     if price > 0:
-#         trims_with_msrp = [t for t in trims if t["msrp"] > 0]
-#         if trims_with_msrp:
-#             closest = min(trims_with_msrp, key=lambda t: abs(t["msrp"] - price))
-#             distance_pct = abs(closest["msrp"] - price) / closest["msrp"] if closest["msrp"] else 1.0
-
-#             if distance_pct <= 0.20:  # ±20% من MSRP
-#                 conf = 0.65 - (distance_pct * 1.5)  # أقرب = أعلى ثقة
-#                 return TrimMatch(
-#                     trim_name=closest["name"], trim_name_ar=closest["name_ar"],
-#                     trim_id=closest["id"], msrp=closest["msrp"], engine=closest["engine"],
-#                     confidence=max(0.45, conf),
-#                     match_method="price_proximity",
-#                     match_detail=f"أقرب MSRP: {closest['msrp']:,} ر.س (فرق {distance_pct:.0%})"
-#                 )
-
-#     # ── الجولة 5: Fallback → Unknown ─────────────────────────
-#     return TrimMatch(
-#         trim_name="Unknown", trim_name_ar="غير محدد",
-#         trim_id="UNKNOWN", msrp=0, engine="",
-#         confidence=0.30, match_method="fallback",
-#         match_detail="لم يتطابق مع أي فئة معروفة"
-#     )
+def normalize(text):
+    return text.lower().strip()
 
 def classify_listing(listing: dict, brand: str, model: str, year: int,
                      dynamic_trims: list = None) -> TrimMatch:
@@ -171,25 +74,38 @@ def classify_listing(listing: dict, brand: str, model: str, year: int,
         reasons = []
 
         # 1️⃣ Keyword Match (أقوى شيء)
-        for kw in trim["keywords"]:
-            if kw and len(kw) >= 2 and kw in title:
-                score += 0.9
-                reasons.append(f"keyword:{kw}")
-                break  # لا تكرر
+        # for kw in trim["keywords"]:
+        #     print(f"Checking keyword '{kw}' for trim '{trim['name']}' against title...")
+        #     if kw and len(kw) >= 1 and kw in title:
+        #         score += 0.9
+        #         reasons.append(f"keyword:{kw}")
+        #         break  # لا تكرر
+        keywords = set(normalize(k) for k in trim["keywords"] if k)
+        titleNormalize = normalize(title)
+        if titleNormalize in keywords:
+            score += 0.9
+            reasons.append(f"keyword:{titleNormalize}")
 
-        # 2️⃣ Name Match
+        # 2️⃣ Name Match (مطابقة كاملة للاسم)
         if trim["name"].lower() in title or trim["name_ar"].lower() in title:
             score += 0.8
             reasons.append("name_match")
 
-        # 3️⃣ Word Overlap
+        # 3️⃣ Word Overlap مع عقوبة على الكلمات الزائدة
         words = trim["name"].lower().split()
         if words:
             hits = sum(1 for w in words if w in title)
             overlap = hits / len(words)
+
+            # عقوبة: كل كلمة في اسم الفئة غير موجودة في العنوان = -0.15
+            misses = len(words) - hits
+            penalty = misses * 0.15
+
+            net_overlap_score = max(0.0, (overlap * 0.6) - penalty)
+
             if overlap > 0:
-                score += overlap * 0.6
-                reasons.append(f"overlap:{overlap:.2f}")
+                score += net_overlap_score
+                reasons.append(f"overlap:{overlap:.2f} penalty:{penalty:.2f}")
 
         # 4️⃣ Price Proximity
         if price > 0 and trim["msrp"] > 0:
@@ -245,6 +161,214 @@ def classify_listing(listing: dict, brand: str, model: str, year: int,
         match_method=method,
         match_detail=" | ".join(best["reasons"]) if best["reasons"] else "default scoring"
     )
+# def normalize(text: str) -> str:
+#     return (text or "").lower().strip()
+
+
+# def tokenize(text: str) -> list:
+#     return normalize(text).split()
+
+
+# # ✅ تنظيف الكلمات (إزالة الأكواد مثل 1l5)
+# def clean_tokens(text: str) -> list:
+#     tokens = tokenize(text)
+#     return [
+#         t for t in tokens
+#         if not t.startswith("(")
+#         and not t.endswith(")")
+#         and not any(c.isdigit() for c in t)
+#     ]
+
+
+# def classify_listing(listing: dict, brand: str, model: str, year: int,
+#                      dynamic_trims: list = None) -> TrimMatch:
+
+#     title = normalize(listing.get("listedAs"))
+#     price = listing.get("price", 0)
+
+#     print(f"\n🔍 Classifying: «{title}» | 💰 {price}")
+
+#     trims = _build_trim_list(brand, model, year, dynamic_trims)
+
+#     # ─────────────────────────────────────────────
+#     # ✅ fallback إذا ما فيه trims
+#     # ─────────────────────────────────────────────
+#     if not trims:
+#         return TrimMatch(
+#             trim_name=f"{model} Standard",
+#             trim_name_ar=f"{model} ستاندرد",
+#             trim_id="fallback",
+#             msrp=0,
+#             engine="",
+#             confidence=0.35,
+#             match_method="fallback_no_trims",
+#             match_detail="no trims"
+#         )
+
+#     # ─────────────────────────────────────────────
+#     # ✅ 1. FILTER قوي
+#     # ─────────────────────────────────────────────
+#     def contains(word):
+#         return word in title
+
+#     strong_filters = ["hybrid", "automatic", "plus"]
+
+#     for f in strong_filters:
+#         if contains(f):
+#             filtered = [t for t in trims if f in normalize(t["name"])]
+#             if filtered:
+#                 trims = filtered
+
+#     # ─────────────────────────────────────────────
+#     # ✅ 2. ترتيب حسب الأطول
+#     # ─────────────────────────────────────────────
+#     trims = sorted(trims, key=lambda t: len(t["name"]), reverse=True)
+
+#     scored_trims = []
+
+#     # ✅ استخدام clean tokens
+#     title_words = set(clean_tokens(title))
+
+#     # ─────────────────────────────────────────────
+#     # ✅ 3. التقييم الذكي
+#     # ─────────────────────────────────────────────
+#     for trim in trims:
+#         score = 0.0
+#         reasons = []
+
+#         name = normalize(trim["name"])
+#         name_ar = normalize(trim["name_ar"])
+
+#         trim_words = set(clean_tokens(name))
+#         word_count = len(trim_words)
+
+#         # 🟢 1. Exact Phrase Match
+#         if name in title or name_ar in title:
+#             score += 2.0
+#             reasons.append("exact_phrase")
+
+#         # 🟢 2. Keyword Match
+#         for kw in trim["keywords"]:
+#             kw = normalize(kw)
+#             if kw and len(kw) >= 2 and kw in title:
+#                 score += 1.5
+#                 reasons.append(f"keyword:{kw}")
+#                 break
+
+#         # 🟢 3. Overlap ذكي
+#         if trim_words:
+#             intersection = title_words & trim_words
+#             overlap = len(intersection) / len(trim_words)
+
+#             if overlap == 1:
+#                 score += 1.2
+#                 reasons.append("full_overlap")
+#             elif overlap > 0:
+#                 score += overlap * 0.7
+#                 reasons.append(f"overlap:{overlap:.2f}")
+
+#         # 🟢 4. Specificity Boost
+#         score += word_count * 0.15
+
+#         # 🔴 5. Penalize الفئات العامة
+#         if word_count == 1:
+#             score -= 0.4
+#             reasons.append("generic_penalty")
+
+#         # 🔴 6. Penalize mismatch
+#         if "plus" in title and "plus" not in name:
+#             score -= 0.5
+#         if "hybrid" in title and "hybrid" not in name:
+#             score -= 0.5
+#         if "automatic" in title and "automatic" not in name:
+#             score -= 0.3
+
+#         # 🔥 7. Penalize الكلمات الزائدة (الحل الأساسي لمشكلتك)
+#         extra_words = trim_words - title_words
+#         if extra_words:
+#             score -= len(extra_words) * 0.15
+#             reasons.append(f"extra_penalty:{len(extra_words)}")
+
+#         # 🟢 8. Price Proximity
+#         if price > 0 and trim["msrp"] > 0:
+#             diff = abs(trim["msrp"] - price) / trim["msrp"]
+#             if diff <= 0.30:
+#                 score += (1 - diff) * 0.8
+#                 reasons.append(f"price:{diff:.2f}")
+
+#         # 🟢 9. Bias بسيط
+#         score += 0.05
+
+#         scored_trims.append({
+#             "trim": trim,
+#             "score": score,
+#             "reasons": reasons
+#         })
+
+#     # ─────────────────────────────────────────────
+#     # ✅ 4. ترتيب النتائج
+#     # ─────────────────────────────────────────────
+#     scored_trims = sorted(scored_trims, key=lambda x: x["score"], reverse=True)
+
+#     best = scored_trims[0]
+#     second = scored_trims[1] if len(scored_trims) > 1 else None
+
+#     best_trim = best["trim"]
+#     best_score = best["score"]
+
+#     print("📊 Scores:")
+#     for t in scored_trims:
+#         print(f" - {t['trim']['name']} → {t['score']:.2f} | {t['reasons']}")
+
+#     print(f"🏆 Selected: {best_trim['name']} ({best_score:.2f})")
+
+#     # ─────────────────────────────────────────────
+#     # ✅ 5. Confidence ذكي
+#     # ─────────────────────────────────────────────
+#     score_gap = 0
+#     if second:
+#         score_gap = best_score - second["score"]
+
+#     confidence = best_score / 2
+
+#     if score_gap < 0.3:
+#         confidence *= 0.7
+
+#     confidence = min(0.95, max(0.35, confidence))
+
+#     # ─────────────────────────────────────────────
+#     # ✅ 6. تحديد نوع المطابقة
+#     # ─────────────────────────────────────────────
+#     if "exact_phrase" in best["reasons"]:
+#         method = "exact"
+#     elif any("keyword" in r for r in best["reasons"]):
+#         method = "keyword"
+#     elif "full_overlap" in best["reasons"]:
+#         method = "full_overlap"
+#     elif any("overlap" in r for r in best["reasons"]):
+#         method = "partial_overlap"
+#     elif any("price" in r for r in best["reasons"]):
+#         method = "price"
+#     else:
+#         method = "fallback"
+
+#     # ─────────────────────────────────────────────
+#     # ✅ 7. تفاصيل
+#     # ─────────────────────────────────────────────
+#     match_detail = f"gap:{score_gap:.2f} | " + (
+#         " | ".join(best["reasons"]) if best["reasons"] else "default scoring"
+#     )
+
+#     return TrimMatch(
+#         trim_name=best_trim["name"],
+#         trim_name_ar=best_trim["name_ar"],
+#         trim_id=best_trim["id"],
+#         msrp=best_trim["msrp"],
+#         engine=best_trim["engine"],
+#         confidence=confidence,
+#         match_method=method,
+#         match_detail=match_detail
+#     )
 
 def _build_trim_list(brand: str, model: str, year: int, dynamic_trims: list = None) -> list[dict]:
     """يجمع الفئات من trims_config + dynamic_trims في قائمة موحدة"""
@@ -377,40 +501,49 @@ def reject_outliers(listings: list[dict], msrp: int = 0,
 # ══════════════════════════════════════════════════════════════════
 #  4. TRIM BUCKETING — توزيع الإعلانات على الفئات
 # ══════════════════════════════════════════════════════════════════
-
 def bucket_listings_by_trim(listings: list[dict], brand: str, model: str, year: int,
                             dynamic_trims: list = None) -> dict:
     """
     يوزّع قائمة الإعلانات على buckets حسب الفئة.
-
-    Returns:
-      {
-        "Camry Lumiere HEV": {
-          "trim_info": {...},
-          "listings": [...],
-          "match_stats": {"keyword": 5, "name": 1, "price_proximity": 2, ...}
-        },
-        ...
-      }
+    ✅ يُنشئ bucket لكل فئة من get_trims مسبقاً — حتى لو ما في إعلانات.
     """
+    # ── 1. أنشئ buckets فارغة لكل فئة معرّفة مسبقاً ──────────
+    configured_trims = get_trims(brand, model, year)
     buckets: dict[str, dict] = {}
+
+    for t in configured_trims:
+        buckets[t.name] = {
+            "trim_info": {
+                "name": t.name,
+                "name_ar": t.name_ar,
+                "id": t.id,
+                "msrp": t.msrp,
+                "engine": t.engine,
+            },
+            "listings": [],
+            "match_stats": {},
+        }
+
     match_stats: dict[str, dict] = defaultdict(lambda: defaultdict(int))
 
+    # ── 2. صنّف كل إعلان وأضفه للـ bucket المناسب ────────────
     for listing in listings:
         match = classify_listing(listing, brand, model, year, dynamic_trims)
-        print(f"  Matched listing «{listing.get('listedAs', '')}» to trim «{match.trim_name}» with confidence {match.confidence:.2f} using {match.match_method}")
-        # أضف معلومات المطابقة للإعلان
-        listing["matchedTrim"] = match.trim_name
-        listing["matchReason"] = match.match_detail
+        print(f"  Matched listing «{listing.get('listedAs', '')}» to trim «{match.trim_name}» "
+              f"with confidence {match.confidence:.2f} using {match.match_method}")
+
+        listing["matchedTrim"]     = match.trim_name
+        listing["matchReason"]     = match.match_detail
         listing["matchConfidence"] = (
-            "high" if match.confidence > 0.85
-            else "medium" if match.confidence > 0.60
-            else "low"
+            "high"   if match.confidence > 0.85 else
+            "medium" if match.confidence > 0.60 else
+            "low"
         )
         listing["matchMethod"] = match.match_method
 
         trim_key = match.trim_name
 
+        # ── إذا جاءت فئة من dynamic_trims غير موجودة في الـ config أضفها ──
         if trim_key not in buckets:
             buckets[trim_key] = {
                 "trim_info": {
@@ -421,17 +554,17 @@ def bucket_listings_by_trim(listings: list[dict], brand: str, model: str, year: 
                     "engine": match.engine,
                 },
                 "listings": [],
+                "match_stats": {},
             }
 
         buckets[trim_key]["listings"].append(listing)
         match_stats[trim_key][match.match_method] += 1
 
-    # إضافة إحصائيات المطابقة
+    # ── 3. أضف إحصائيات المطابقة ─────────────────────────────
     for key in buckets:
         buckets[key]["match_stats"] = dict(match_stats.get(key, {}))
 
     return buckets
-
 
 def build_trims_response(buckets: dict, brand: str, model: str, year: int) -> list[dict]:
     """
@@ -439,42 +572,52 @@ def build_trims_response(buckets: dict, brand: str, model: str, year: int) -> li
       trims: [{ officialName, officialMSRP, listings, priceAnalysis, ... }]
 
     مع:
+      - الحفاظ على جميع الفئات من get_trims حتى لو فارغة
       - حذف المكررات داخل كل فئة
       - رفض الشاذ (outliers) حسب MSRP
       - حساب priceAnalysis
     """
     trims_out = []
 
-    # رتّب: الأغلى أولاً (عادةً Lumiere/VXR/Platinum)
-    sorted_keys = sorted(
-        buckets.keys(),
+    # ── 1. ابدأ بالفئات الرسمية من get_trims مرتبة حسب MSRP ──
+    configured_trims = get_trims(brand, model, year)
+    configured_names = [t.name for t in configured_trims]
+
+    # الفئات الرسمية أولاً (مرتبة حسب MSRP تنازلياً)
+    official_keys = sorted(
+        [k for k in buckets.keys() if k in configured_names],
         key=lambda k: buckets[k]["trim_info"].get("msrp", 0),
         reverse=True
     )
+
+    # الفئات غير الرسمية (dynamic_trims أو Unknown) بعدها
+    extra_keys = [k for k in buckets.keys() if k not in configured_names]
+
+    sorted_keys = official_keys + extra_keys
+
     print(f"Sorted trim keys: {sorted_keys}")
-    # ── حساب النطاق السعري من الفئات المعروفة (للتحقق من Unknown) ──
+
+    # ── 2. حساب النطاق السعري من الفئات المعروفة ──────────────
     known_msrps = [
         buckets[k]["trim_info"]["msrp"]
-        for k in sorted_keys
-        if buckets[k]["trim_info"].get("msrp", 0) > 0 and k != "Unknown"
+        for k in official_keys
+        if buckets[k]["trim_info"].get("msrp", 0) > 0
     ]
     model_price_floor = int(min(known_msrps) * 0.70) if known_msrps else 0
     model_price_ceil  = int(max(known_msrps) * 1.35) if known_msrps else 0
 
     for trim_key in sorted_keys:
         bucket = buckets[trim_key]
-        info = bucket["trim_info"]
+        info   = bucket["trim_info"]
         listings = bucket["listings"]
 
         # ── حذف المكررات ────────────────────────────────────
         listings = deduplicate_listings(listings)
 
         # ── رفض الشاذ ───────────────────────────────────────
-        # نطاق أوسع من _price_in_range لأن هنا نريد الاحتفاظ بالبيانات
-        # المعقولة حتى لو كان فيها خصم كبير أو علاوة استثنائية
         listings = reject_outliers(listings, info.get("msrp", 0))
 
-        # ── فلتر إضافي لـ Unknown: استخدم نطاق الموديل ككل ──
+        # ── فلتر إضافي لـ Unknown ────────────────────────────
         if trim_key == "Unknown" and model_price_floor > 0:
             listings = [
                 l for l in listings
@@ -484,28 +627,28 @@ def build_trims_response(buckets: dict, brand: str, model: str, year: int) -> li
 
         # ── حساب priceAnalysis ──────────────────────────────
         prices = [l["price"] for l in listings if l.get("price", 0) > 0]
-        msrp = info.get("msrp", 0)
+        msrp   = info.get("msrp", 0)
 
         if prices:
             market_avg = int(sum(prices) / len(prices))
-            vs_pct = round((market_avg - msrp) / msrp * 100, 1) if msrp else 0
+            vs_pct     = round((market_avg - msrp) / msrp * 100, 1) if msrp else 0
         else:
             market_avg = 0
-            vs_pct = 0
+            vs_pct     = 0
 
         trim_obj = {
-            "officialName": info["name"],
+            "officialName":   info["name"],
             "officialNameAr": info.get("name_ar", info["name"]),
-            "officialMSRP": msrp,
-            "engine": info.get("engine", ""),
-            "commonAliases": [],
-            "listings": listings,
+            "officialMSRP":   msrp,
+            "engine":         info.get("engine", ""),
+            "commonAliases":  [],
+            "listings":       listings,
             "priceAnalysis": {
-                "marketMin": min(prices) if prices else 0,
-                "marketMax": max(prices) if prices else 0,
-                "marketAvg": market_avg,
+                "marketMin":    min(prices) if prices else 0,
+                "marketMax":    max(prices) if prices else 0,
+                "marketAvg":    market_avg,
                 "vsOfficialPct": vs_pct,
-                "trend": "stable",
+                "trend":        "stable",
                 "listingCount": len(prices),
             },
             "matchStats": bucket.get("match_stats", {}),
@@ -514,8 +657,6 @@ def build_trims_response(buckets: dict, brand: str, model: str, year: int) -> li
         trims_out.append(trim_obj)
 
     return trims_out
-
-
 # ══════════════════════════════════════════════════════════════════
 #  5. MAIN ENTRY — الدالة الرئيسية
 # ══════════════════════════════════════════════════════════════════
@@ -542,16 +683,19 @@ def classify_and_structure(raw_listings: list[dict],
     """
     # ── تصنيف وتوزيع ────────────────────────────────────────
     buckets = bucket_listings_by_trim(raw_listings, brand, model, year, dynamic_trims)
+    # print(f"buckets data : {buckets} ")
     # ── دمج مع AI (إذا وجد) ─────────────────────────────────
     if ai_data and ai_data.get("trims"):
         _merge_ai_trims(buckets, ai_data, brand, model, year)
 
     # ── بناء الاستجابة النهائية ──────────────────────────────
+    # print(f"buckets data after _merge_ai_trims : {buckets} ")
     trims = build_trims_response(buckets, brand, model, year)
-
-    # ── إزالة "Unknown" إذا كان فارغاً ──────────────────────
-    trims = [t for t in trims if t["listings"] or t["officialMSRP"] > 0]
-
+   
+    # ✅ الآن: أبقِ جميع الفئات من get_trims حتى لو فارغة
+    # احذف فقط Unknown الفارغة (مش فئة رسمية)
+    # trims = [t for t in trims if t["listings"] or (t["officialMSRP"] > 0 and t["officialName"] != "Unknown")]
+    # print(f"trims after build_trims_response : {trims} ")
     # ── بناء الهيكل النهائي ──────────────────────────────────
     all_prices = []
     for t in trims:
